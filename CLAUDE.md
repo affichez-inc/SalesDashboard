@@ -116,7 +116,7 @@ sections that have a screen on it and by nobody else; the policies call
 | `excluded_clients`, `excluded_reps` | Devis, Factures, Mon Portail | |
 | `fiscal_quarters` | Devis, Factures | |
 | `zoho_books_customers` | Factures | |
-| `zoho_tasks`, `webhook_log`, `zoho_books_users`, `department_mappings`, `leads` | admins | |
+| `zoho_tasks`, `webhook_log`, `zoho_books_users`, `department_mappings`, `leads`, `meta_audience_log` | admins | |
 
 "Own rows" is `rep_name = app_portal_rep()`: the caller's `rep_name`, and only
 while Mon Portail is ticked. Every portal screen already filtered on that name,
@@ -322,6 +322,24 @@ blaming anything else:
 curl.exe -H "x-check-scope: true" https://auyfucbskylougsmmrks.supabase.co/functions/v1/zoho-account-sync
 ```
 
+**A field added to a sync reaches old records only through a full walk.** The
+syncs are incremental on Modified Time, so a record nobody edits is never read
+again. Since 2026-10-07 `zoho-lead-sync` reads Mobile, Secondary_Email, Title
+(`Designation` on Leads), Langue, Email_Opt_Out, Unsubscribed_Mode and, on
+Contacts, the "Ne veut pas recevoir nos courriels marketing" and "Email de masse
+non remis" checkboxes; `zoho-account-sync` reads the Shipping_* address. Their
+columns stay NULL until `scripts/zoho-crm-full-sync.sh` has run once after the
+deploy. Deploy the migration before the functions (CI does, in that order): a
+payload naming a column that does not exist makes every upsert fail.
+
+**Zoho can leave a requested field out without an error.** On Contacts, the sync's
+login never gets `Email_Opt_Out` back (absent on 200 of 200 on 2026-10-07), while
+`Unsubscribed_Mode` is always there and set exactly on unsubscribed records; on
+Leads the two always agree. `email_opt_out` is therefore "either one says yes"
+(`emailOptOut()`). Before trusting a new field, fetch a few records with the
+sync's own token and check the field is actually in the response, not just that
+the request succeeded.
+
 ### Who created a document, vs who sold it
 
 Zoho Books stores two different people on a quote or invoice: the **salesperson**
@@ -418,6 +436,65 @@ SECURITY INVOKER and follow that policy; `zoho_accounts_enriched` is
 and `zoho_leads` in full, which its detail screen shows account by account (the
 table under **Access** has every reader). The syncs write with the service role
 and bypass RLS.
+
+### Comptes · Détail: amount filter, exports, Meta audiences
+
+Migration `20261007120000_account_spend_and_contact_reach.sql`, function
+`meta-custom-audience`.
+
+- **"Montant facturé"** filters accounts on what they were billed, net of credit
+  notes, over a period: `revenue_lifetime`, `revenue_12m`, `revenue_ytd`,
+  `revenue_prev_year`, `revenue_last_month`, `revenue_30d` on
+  `zoho_accounts_enriched`, on Montreal's calendar. The filter is a plain
+  PostgREST `gte`/`lte` on one of those columns, so the table, its count, the
+  popover's live count, both exports and the audience read the same accounts
+  (`buildQuery` in `AccountsDetail.tsx`). Filtered by amount, the list sorts by
+  that amount. The slider is a ladder of round values (`spendRange.ts`), because
+  half the invoiced accounts are under 2 k$ and one is near 5 M$; its top comes
+  from `get_account_spend_max` and the end of the track means "no maximum".
+- **The period bounds sit behind `OFFSET 0`** in the view. Without it the planner
+  flattens the one-row "today" subquery and re-evaluates `now() AT TIME ZONE` for
+  every bound on every invoice row: the default page went from 47 to 88 ms.
+- **Export** offers "Comptes seulement" and "Comptes et contacts": each account
+  followed by its contacts, amounts on the account line only. Both read in pages
+  of 1,000, the API's row cap; one large `range()` silently stops at 1,000.
+  `get_accounts_contacts` returns contacts only (a converted lead is already its
+  contact) with the account's postal address, `mail_*`: the shipping block when it
+  has a street, city or postal code, the billing block otherwise. Contacts have no
+  address of their own in this org.
+- **"Audience Meta"** (Comptes and Publicité both, `app_can_push_meta_audience`)
+  sends the account ids to `meta-custom-audience`, which reads the contacts with
+  the caller's token, normalises and SHA-256 hashes email, phone, names, city,
+  province, postal code and country (`normalize.ts`), creates a customer-list
+  audience on `META_AUDIENCE_AD_ACCOUNT_ID` and uploads in one session. A contact
+  is sent only when `email_opt_out = false` **and** `no_marketing = false`: a
+  refusal or a NULL on either (not synced yet, or not returned to the sync) leaves
+  it out by default. Unknown is never read as consent; keep that rule identical in
+  the function and in `accountContacts.refusedMarketing`. A list holding any
+  acquired-list account (`is_bulk_import`) is declared
+  `BOTH_USER_AND_PARTNER_PROVIDED`, otherwise `USER_PROVIDED_ONLY`.
+- **The audit row comes first.** `meta_audience_log` (admins read it) gets a
+  `pending` row with the contacts about to be sent before anything reaches Meta,
+  and is updated to `created` or `failed`; if that first insert fails, nothing is
+  sent. It holds who, when, the counts, the page's filters as URL parameters plus
+  `recherche` for the search box (`filters`), and the Zoho ids of the contacts
+  sent (`contact_ids`, GIN-indexed, ids only), which can only be captured at
+  creation. A row still `pending` an hour later was interrupted.
+- **CPU, not wall clock, is the limit.** Supabase stops a function at ~2 s of CPU.
+  Hashing is synchronous (`node:crypto` `createHash`; WebCrypto's per-value async
+  digest was ~4x the cost) and the contacts are read with an explicit `select=`
+  (the sort columns must be in it: PostgREST orders the projection). The largest
+  possible audience, every client account, measured 0.7 s. Every page loop stops on
+  an EMPTY page, not a short one, so a lower server row cap cannot truncate it.
+- The create call is retried only on throttling codes, never on a 5xx: a retry
+  after a create that did succeed would leave a second, empty audience. The token
+  needs `ads_management`, the system user full control of the ad account, and a
+  human admin must have accepted the Custom Audience terms. Only an explicit
+  permission list without `ads_management` blocks the dialog; the terms flag is a
+  warning, and Meta's own refusal at create time (1870034) is the real test.
+- **Avoid amounts in an audience name.** Meta blocks audiences whose name or
+  description suggests financial status, which is why the default name is just
+  "Comptes Affichez <date>".
 
 The Leads pages and every `get_zoho_lead*` RPC are still there and still work —
 only the routes and nav entries in `App.tsx` / `Layout.tsx` are commented out.

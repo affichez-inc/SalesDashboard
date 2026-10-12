@@ -399,6 +399,12 @@ verify_jwt = false
 [functions.ads-spend-sync]
 verify_jwt = false
 
+# Called from the browser with the user's session. The gateway checks the
+# token's signature; the function then asks app_can_push_meta_audience() with
+# it, because the anon key is a valid token too.
+[functions.meta-custom-audience]
+verify_jwt = true
+
 # Called by n8n every Friday with only an x-report-secret header and no JWT, so
 # these need the same pin as the cron-driven functions. They survive today only
 # because the CLI leaves an unlisted function's setting alone — undocumented

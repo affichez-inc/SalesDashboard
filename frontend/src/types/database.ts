@@ -505,6 +505,75 @@ export type ZohoAccountRow = {
      */
     service_resolved: string[];
     service_origin: 'crm' | 'invoice' | 'none';
+
+    /**
+     * Net amount billed over a period, on Montreal's calendar. What the
+     * "Montant facturé" filter compares; see components/accounts/spendRange.
+     */
+    revenue_30d: number;
+    revenue_last_month: number;
+    revenue_12m: number;
+    revenue_ytd: number;
+    revenue_prev_year: number;
+
+    /**
+     * One postal address, taken whole from the shipping block when it has a
+     * street, city or postal code, from the billing block otherwise. Contacts
+     * have no address of their own, so this is theirs too.
+     */
+    mail_street: string | null;
+    mail_city: string | null;
+    mail_state: string | null;
+    mail_code: string | null;
+    mail_country: string | null;
+    mail_source: 'shipping' | 'billing' | null;
+};
+
+/** get_account_spend_max: the top of the range slider, per period. */
+export type AccountSpendMax = {
+    /** Montreal's date the periods were computed from, YYYY-MM-DD. */
+    today: string;
+    lifetime: number | null;
+    last_30d: number | null;
+    last_month: number | null;
+    last_12m: number | null;
+    ytd: number | null;
+    prev_year: number | null;
+};
+
+/**
+ * get_accounts_contacts: the contacts of a list of accounts, with the account's
+ * postal address. Contacts only - a converted lead is already its contact.
+ *
+ * The three refusal flags are null until the record has been read by a sync
+ * that knows them, which is not the same as false.
+ */
+export type AccountContactExportRow = {
+    account_id: string;
+    zoho_record_id: string;
+    full_name: string | null;
+    first_name: string | null;
+    last_name: string | null;
+    title: string | null;
+    email: string | null;
+    secondary_email: string | null;
+    phone: string | null;
+    mobile: string | null;
+    language: string | null;
+    email_opt_out: boolean | null;
+    no_marketing: boolean | null;
+    email_bounced: boolean | null;
+    rep_name: string | null;
+    created_time: string | null;
+    zoho_crm_url: string | null;
+    mail_street: string | null;
+    mail_city: string | null;
+    mail_state: string | null;
+    mail_code: string | null;
+    mail_country: string | null;
+    mail_source: 'shipping' | 'billing' | null;
+    /** The account came from an acquired client list (Royer & Fils, PLOGG/BUCCO). */
+    is_bulk_import: boolean;
 };
 
 /**

@@ -1,4 +1,5 @@
 import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { useUrlState, useUrlStateNumber } from '../hooks/useUrlState';
 import { supabase } from '../lib/supabase';
 import { cachedRpc, invalidateRpcCache } from '../lib/rpcCache';
@@ -8,20 +9,30 @@ import {
 } from 'lucide-react';
 import type {
     ZohoAccountRow, ZohoAccountFilterOptions, LeadInvoiceRow, LeadInvoiceTotals,
-    AccountDeptRevenueRow, AccountContactRow,
+    AccountDeptRevenueRow, AccountContactRow, AccountSpendMax,
 } from '../types/database';
 import { MONTHS } from '../lib/constants';
 import { FilterBar, FilterGroup } from '../components/FilterBar';
 import { Select } from '../components/Select';
 import { ExportButton } from '../components/ExportButton';
+import { ExportMenu } from '../components/ExportMenu';
 import { ClearFiltersButton } from '../components/ClearFiltersButton';
 import { TagCell } from '../components/TagCell';
 import { useRepFilter, REP_ALL_LABEL } from '../hooks/useRepFilter';
 import { useUrlList } from '../hooks/useUrlState';
 import { MultiSelect } from '../components/MultiSelect';
-import type { CsvColumn } from '../lib/csv';
+import { downloadCsv, type CsvColumn } from '../lib/csv';
 import { RepName } from '../components/RepAvatar';
 import { useRepTeam } from '../lib/repTeam';
+import { useAuth } from '../contexts/AuthContext';
+import { AmountRangeFilter } from '../components/accounts/AmountRangeFilter';
+import { MetaAudienceModal } from '../components/accounts/MetaAudienceModal';
+import { ChannelLogo } from '../components/advertising/ChannelLogo';
+import { fetchAccountContacts, groupedLines, accountContactColumns } from '../components/accounts/accountContacts';
+import {
+    DEFAULT_SPEND_PERIOD, spendPeriod, spendPeriodShort, isSpendFilterActive,
+    type SpendRange, type SpendPeriodKey,
+} from '../components/accounts/spendRange';
 import {
     formatShortDate, formatCurrencyCAD, formatPhone, phoneSearchPattern, cn,
 } from '../lib/utils';
@@ -58,6 +69,10 @@ const PAGE_SIZE = 100;
 /** Exports are capped: 20,645 rows is a fine CSV, but an unbounded range on a
  *  view with a LEFT JOIN aggregate is not something to hand a browser blindly. */
 const EXPORT_MAX = 25000;
+/** The API's row cap per request; the export reads in slices of this size. */
+const EXPORT_PAGE = 1000;
+
+const NO_REPS: string[] = [];
 
 /** Zoho writes "-None-" into a picklist that was never set. */
 const isBlankPick = (v: string | null): boolean => !v || v === '-None-';
@@ -84,6 +99,10 @@ export default function AccountsDetail() {
     const [selectedRegions, _setSelectedRegions] = useUrlList('region');
     const [selectedInvoiced, _setSelectedInvoiced] = useUrlState('factures', 'Tous');
     const [ratingScope, _setRatingScope] = useUrlState('statut', 'Clients');
+    // "Montant facturé": both bounds optional, and the period they apply to.
+    const [amountMinParam, _setAmountMin] = useUrlState('montant_min', '');
+    const [amountMaxParam] = useUrlState('montant_max', '');
+    const [amountPeriodParam] = useUrlState('montant_periode', DEFAULT_SPEND_PERIOD);
     const [page, setPage] = useUrlStateNumber('page', 1);
 
     const [search, setSearch] = useState('');
@@ -96,8 +115,10 @@ export default function AccountsDetail() {
     const [invoiceTotals, setInvoiceTotals] = useState<Record<string, LeadInvoiceTotals>>({});
     const [detailAccount, setDetailAccount] = useState<ZohoAccountRow | null>(null);
 
-    // Interne and/or reps by name. See hooks/useRepFilter.
-    const repFilter = useRepFilter(selectedReps, options?.reps ?? []);
+    // Interne and/or reps by name. See hooks/useRepFilter. NO_REPS rather than a
+    // fresh [] while the options load: a new array each render rebuilt the query
+    // and refetched on every render, forever if the options call failed.
+    const repFilter = useRepFilter(selectedReps, options?.reps ?? NO_REPS);
 
     // A filter change invalidates the page number - page 7 of a 3-page result is
     // an empty table, which reads as "no data" rather than "wrong page".
@@ -121,6 +142,30 @@ export default function AccountsDetail() {
     const setSelectedRegions = (v: string[]) => _setSelectedRegions(v, toPage1);
     const setSelectedInvoiced = (v: string) => _setSelectedInvoiced(v, toPage1);
     const setRatingScope = (v: string) => _setRatingScope(v, toPage1);
+
+    const amountRange = useMemo<SpendRange>(() => {
+        const num = (s: string) => (s !== '' && Number.isFinite(Number(s)) ? Number(s) : null);
+        return {
+            min: num(amountMinParam),
+            max: num(amountMaxParam),
+            period: spendPeriod(amountPeriodParam).key as SpendPeriodKey,
+        };
+    }, [amountMinParam, amountMaxParam, amountPeriodParam]);
+    const amountActive = isSpendFilterActive(amountRange);
+    /** The view column the amount filter compares, when it is on. */
+    const amountColumn = amountActive ? spendPeriod(amountRange.period).column : null;
+
+    // The three params move in one navigation, with the page reset, for the
+    // reason given at toPage1. A period with no amount is not a filter, so it
+    // is not kept either: it would sit in the link and in an audience's record.
+    const setAmountRange = (r: SpendRange) => {
+        const on = isSpendFilterActive(r);
+        _setAmountMin(on && r.min !== null && r.min > 0 ? String(r.min) : '', {
+            montant_max: on && r.max !== null ? String(r.max) : null,
+            montant_periode: on && r.period !== DEFAULT_SPEND_PERIOD ? r.period : null,
+            page: null,
+        });
+    };
 
     /**
      * Debounced search, with the page reset skipped on the first run.
@@ -147,6 +192,7 @@ export default function AccountsDetail() {
         _setYearParam('Toutes', {
             month: null, rep: null, source: null, service: null,
             domaine: null, region: null, factures: null, statut: null, page: null,
+            montant_min: null, montant_max: null, montant_periode: null,
         });
     };
 
@@ -163,6 +209,7 @@ export default function AccountsDetail() {
         selectedRegions.length > 0,
         selectedInvoiced !== 'Tous',
         ratingScope !== 'Clients',
+        amountActive,
     ].filter(Boolean).length;
 
     useEffect(() => {
@@ -197,13 +244,28 @@ export default function AccountsDetail() {
         return { from, to };
     }, [year, selectedMonth]);
 
-    /** One query builder for the table and for the export, so the CSV can never
-     *  describe a different set of accounts from the one on screen. */
-    const buildQuery = useCallback((forExport: boolean) => {
+    /**
+     * One query builder for the table, the export, the Meta audience and the
+     * amount filter's live count, so none of them can describe a different set
+     * of accounts from the one on screen.
+     *
+     * `amount` is passed in rather than read from the URL so the amount popover
+     * can count a draft before it is applied.
+     */
+    const buildQuery = useCallback((mode: 'page' | 'export' | 'count', amount: SpendRange) => {
         let query = supabase
             .from('zoho_accounts_enriched')
-            .select('*', { count: forExport ? undefined : 'exact' })
-            .order('created_time', { ascending: false, nullsFirst: false });
+            .select('*', mode === 'count'
+                ? { count: 'exact', head: true }
+                : { count: mode === 'page' ? 'exact' : undefined });
+
+        // The amount billed over the chosen period. Zero at the bottom of the
+        // range is "no minimum": it keeps the accounts that bought nothing.
+        const spendCol = isSpendFilterActive(amount) ? spendPeriod(amount.period).column : null;
+        if (spendCol) {
+            if (amount.min !== null && amount.min > 0) query = query.gte(spendCol, amount.min);
+            if (amount.max !== null) query = query.lte(spendCol, amount.max);
+        }
 
         if (dateBounds) query = query.gte('created_time', dateBounds.from).lt('created_time', dateBounds.to);
         // A group becomes an `in` list; a single rep stays an equality. Both go
@@ -232,9 +294,26 @@ export default function AccountsDetail() {
                 `website.ilike.${like},phone.ilike.${phoneSearchPattern(term)}`,
             );
         }
+
+        if (mode !== 'count') {
+            // Filtered by amount, the list reads largest first - the question
+            // was "who bought the most". Otherwise newest first, as it always was.
+            if (spendCol) query = query.order(spendCol, { ascending: false });
+            // The id breaks ties, so paging through the export in slices of a
+            // thousand never skips or repeats an account created the same second.
+            query = query
+                .order('created_time', { ascending: false, nullsFirst: false })
+                .order('zoho_account_id', { ascending: true });
+        }
         return query;
     }, [dateBounds, repFilter, selectedSources, selectedServices, selectedDomaines,
         selectedRegions, selectedInvoiced, ratingScope, debouncedSearch, serviceVariants]);
+
+    /** How many accounts a draft amount range keeps, with every other filter on. */
+    const countForAmount = useCallback(async (draft: SpendRange): Promise<number | null> => {
+        const { count, error } = await buildQuery('count', draft);
+        return error ? null : count ?? 0;
+    }, [buildQuery]);
 
     /**
      * Monotonic request id. Nine filters over 20,645 rows means a broad query and
@@ -262,7 +341,7 @@ export default function AccountsDetail() {
         const id = ++requestId.current;
         setLoading(true);
         const from = (page - 1) * PAGE_SIZE;
-        const { data, count } = await buildQuery(false).range(from, from + PAGE_SIZE - 1);
+        const { data, count } = await buildQuery('page', amountRange).range(from, from + PAGE_SIZE - 1);
         if (id !== requestId.current) return; // a newer query has already answered
         const pageRows = (data as ZohoAccountRow[]) ?? [];
         setRows(pageRows);
@@ -287,7 +366,7 @@ export default function AccountsDetail() {
         // Factures column, so it renders on the first result rather than
         // waiting on a second round trip.
         fetchInvoiceTotals(pageRows, id);
-    }, [buildQuery, page, fetchInvoiceTotals, setPage]);
+    }, [buildQuery, amountRange, page, fetchInvoiceTotals, setPage]);
 
     const fetchOptions = useCallback(async () => {
         const { data } = await cachedRpc<ZohoAccountFilterOptions>('get_zoho_account_filter_options', {
@@ -304,17 +383,90 @@ export default function AccountsDetail() {
     useEffect(() => { fetchData(); }, [fetchData]);
     useEffect(() => { fetchOptions(); }, [fetchOptions]);
 
-    /** The export runs the same filters with no LIMIT, so what lands in Excel is
-     *  the whole filtered set - not the 100 rows that happen to be on screen. */
-    const repTeam = useRepTeam();
+    // The top of the amount slider, per period. Until it loads - or on a
+    // database that does not have the function yet - the amount filter is not
+    // offered, rather than offered against columns that do not exist.
+    const [spendMax, setSpendMax] = useState<AccountSpendMax | null>(null);
+    useEffect(() => {
+        cachedRpc<AccountSpendMax>('get_account_spend_max', {}, { single: true })
+            .then(({ data }) => { if (data) setSpendMax(data); });
+    }, []);
 
-    const exportRows = useCallback(async () => {
-        const { data } = await buildQuery(true).range(0, EXPORT_MAX - 1);
-        // The export says what the screen says: a rep off the sales team is
-        // Interne there too.
-        return ((data as ZohoAccountRow[]) ?? [])
+    const repTeam = useRepTeam();
+    const { sections } = useAuth();
+    /** Creating an audience needs the client list and the ad accounts both. */
+    const canPushAudience = sections.comptes && sections.publicite;
+    const [audienceOpen, setAudienceOpen] = useState(false);
+
+    /**
+     * The whole filtered set, in pages of a thousand: the API returns at most
+     * that many rows per request whatever range is asked for, so one large
+     * range would quietly stop at the first thousand.
+     */
+    const fetchAllFiltered = useCallback(async (): Promise<ZohoAccountRow[]> => {
+        const out: ZohoAccountRow[] = [];
+        for (let from = 0; from < EXPORT_MAX; from += EXPORT_PAGE) {
+            const { data, error } = await buildQuery('export', amountRange).range(from, from + EXPORT_PAGE - 1);
+            // A plain object from postgrest-js, not an Error: wrapped for the message.
+            if (error) throw new Error(error.message);
+            const pageRows = (data as ZohoAccountRow[]) ?? [];
+            out.push(...pageRows);
+            // An empty page ends it, not a short one: see accountContacts.
+            if (pageRows.length === 0) break;
+        }
+        return out;
+    }, [buildQuery, amountRange]);
+
+    /** The period amount, as a column, when the amount filter is on a period. */
+    const periodAmount = useMemo(() => {
+        if (!amountColumn || amountRange.period === 'tout') return undefined;
+        const col = amountColumn;
+        return {
+            header: `Facturé (${spendPeriodShort(amountRange.period, spendMax?.today ?? null)})`,
+            value: (a: ZohoAccountRow) => a[col],
+        };
+    }, [amountColumn, amountRange.period, spendMax]);
+
+    /** The export says what the screen says: a rep off the sales team is Interne there too. */
+    const exportAccounts = useCallback(async () => {
+        const accounts = (await fetchAllFiltered())
             .map(a => ({ ...a, rep_name: repTeam.display(a.rep_name) }));
-    }, [buildQuery, repTeam]);
+        const cols: CsvColumn<ZohoAccountRow>[] = periodAmount
+            ? [...ACCOUNT_CSV.slice(0, ACCOUNT_CSV_AMOUNT_AT), periodAmount, ...ACCOUNT_CSV.slice(ACCOUNT_CSV_AMOUNT_AT)]
+            : ACCOUNT_CSV;
+        downloadCsv(accounts, cols, 'comptes');
+    }, [fetchAllFiltered, repTeam, periodAmount]);
+
+    /** Each account followed by its contacts, in one file. */
+    const exportAccountsWithContacts = useCallback(async () => {
+        const accounts = await fetchAllFiltered();
+        const contacts = await fetchAccountContacts(accounts.map(a => a.zoho_account_id));
+        const cols = accountContactColumns({ displayRep: repTeam.display, periodAmount });
+        downloadCsv(groupedLines(accounts, contacts), cols, 'comptes_contacts');
+    }, [fetchAllFiltered, repTeam, periodAmount]);
+
+    /**
+     * The filters behind an audience, kept with it in meta_audience_log: every
+     * URL parameter but the page number, plus the search box, which filters the
+     * list but lives outside the URL. A parameter left out was at its default.
+     */
+    const [searchParams] = useSearchParams();
+    const audienceFilters = useMemo(() => {
+        const out: Record<string, string[]> = {};
+        for (const [key, value] of searchParams) {
+            if (key === 'page') continue;
+            (out[key] ??= []).push(value);
+        }
+        const term = debouncedSearch.trim();
+        if (term) out.recherche = [term];
+        return out;
+    }, [searchParams, debouncedSearch]);
+
+    const audienceName = useMemo(() => {
+        const d = new Date();
+        const pad = (n: number) => String(n).padStart(2, '0');
+        return `Comptes Affichez ${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+    }, []);
 
     const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
     const rangeStart = total === 0 ? 0 : (page - 1) * PAGE_SIZE + 1;
@@ -333,19 +485,48 @@ export default function AccountsDetail() {
     return (
         <div className="p-4 md:p-8 max-w-screen-2xl mx-auto space-y-6">
             <div className="flex flex-wrap items-start justify-between gap-4">
-                <div>
+                {/* flex-1: the description wraps before the three buttons are
+                    pushed onto a line of their own. */}
+                <div className="flex-1 min-w-[16rem]">
                     <h1 className="text-xl md:text-2xl font-semibold text-ink tracking-tight">Comptes · Détail</h1>
                     <p className="text-xs md:text-sm text-ink-mute mt-0.5">
                         Répertoire des comptes clients. Cliquez sur un compte pour voir sa facturation par
                         département et par année.
                     </p>
                 </div>
-                <div className="flex items-center gap-2">
-                    <ExportButton
-                        rows={exportRows} columns={ACCOUNT_CSV}
-                        filename="comptes" disabled={total === 0}
+                <div className="flex flex-wrap items-center gap-2">
+                    <ExportMenu
+                        disabled={total === 0}
                         label={total > 0 ? `Exporter ${total.toLocaleString('fr-CA')} comptes` : 'Exporter CSV'}
+                        // The contacts export and the audience need this release's
+                        // migration; spendMax answering is the sign it is there.
+                        choices={[
+                            {
+                                key: 'comptes',
+                                label: 'Comptes seulement',
+                                hint: 'Une ligne par compte, comme le tableau.',
+                                run: exportAccounts,
+                            },
+                            ...(spendMax ? [{
+                                key: 'contacts',
+                                label: 'Comptes et contacts',
+                                hint: "Chaque compte suivi de ses contacts : nom, courriel, téléphones, adresse d'envoi.",
+                                run: exportAccountsWithContacts,
+                            }] : []),
+                        ]}
                     />
+                    {canPushAudience && spendMax && (
+                        <button
+                            type="button"
+                            onClick={() => setAudienceOpen(true)}
+                            disabled={total === 0}
+                            title="Créer une audience personnalisée Meta avec les contacts de ces comptes"
+                            className="btn btn-xs btn-quiet"
+                        >
+                            <ChannelLogo channel="meta" size="xs" />
+                            Audience Meta
+                        </button>
+                    )}
                     <button
                         // The whole point of this button is to bypass the
                         // cache; without the drop it would replay the same
@@ -416,6 +597,15 @@ export default function AccountsDetail() {
                         ]}
                     />
                 </FilterGroup>
+                {spendMax && (
+                    <FilterGroup label="Montant facturé">
+                        <AmountRangeFilter
+                            value={amountRange} onApply={setAmountRange}
+                            maxima={spendMax} previewCount={countForAmount}
+                            className="w-56"
+                        />
+                    </FilterGroup>
+                )}
                 <FilterGroup label="Statut">
                     <Select
                         value={ratingScope} onChange={setRatingScope} className="w-52"
@@ -433,6 +623,7 @@ export default function AccountsDetail() {
                     page={page} totalPages={totalPages} total={total}
                     rangeStart={rangeStart} rangeEnd={rangeEnd}
                     onChange={setPage} position="top"
+                    note={amountActive ? 'triés par montant facturé' : undefined}
                 />
 
                 {loading ? (
@@ -458,6 +649,9 @@ export default function AccountsDetail() {
                                     <th className="th">Source</th>
                                     <th className="th">Domaine</th>
                                     <th className="th">Service</th>
+                                    {periodAmount && (
+                                        <th className="th text-right">{periodAmount.header}</th>
+                                    )}
                                     <th className="th text-right">Factures</th>
                                     <th className="th">Créé le</th>
                                     <th className="th">CRM</th>
@@ -533,6 +727,11 @@ export default function AccountsDetail() {
                                                     )}
                                                 </span>
                                             </td>
+                                            {periodAmount && (
+                                                <td className="td text-right whitespace-nowrap font-semibold text-ink tabular-nums" translate="no">
+                                                    {formatCurrencyCAD(periodAmount.value(a))}
+                                                </td>
+                                            )}
                                             <td className="td text-right">
                                                 {totals ? (
                                                     // Amount on top, the document count under it: the
@@ -600,6 +799,15 @@ export default function AccountsDetail() {
             {detailAccount && (
                 <AccountDetailModal account={detailAccount} onClose={() => setDetailAccount(null)} />
             )}
+
+            {audienceOpen && (
+                <MetaAudienceModal
+                    loadAccounts={fetchAllFiltered}
+                    filters={audienceFilters}
+                    defaultName={audienceName}
+                    onClose={() => setAudienceOpen(false)}
+                />
+            )}
         </div>
     );
 }
@@ -611,7 +819,7 @@ export default function AccountsDetail() {
  * accounts is 188 pages, and stepping to the end one arrow at a time is not a
  * navigation option.
  */
-function Pager({ page, totalPages, total, rangeStart, rangeEnd, onChange, position }: {
+function Pager({ page, totalPages, total, rangeStart, rangeEnd, onChange, position, note }: {
     page: number;
     totalPages: number;
     total: number;
@@ -619,6 +827,8 @@ function Pager({ page, totalPages, total, rangeStart, rangeEnd, onChange, positi
     rangeEnd: number;
     onChange: (p: number) => void;
     position: 'top' | 'bottom';
+    /** Said after the count, e.g. how the rows are ordered when it is not the default. */
+    note?: string;
 }) {
     const go = (p: number) => onChange(Math.min(totalPages, Math.max(1, p)));
     const btn = 'p-1.5 rounded-md text-ink-mute hover:bg-stone disabled:opacity-30 disabled:hover:bg-transparent';
@@ -631,6 +841,7 @@ function Pager({ page, totalPages, total, rangeStart, rangeEnd, onChange, positi
                 {total === 0
                     ? 'Aucun compte'
                     : rangeStart + '–' + rangeEnd + ' sur ' + total.toLocaleString('fr-CA') + ' comptes'}
+                {note && total > 0 && <span className="text-ink-faint">{' · ' + note}</span>}
             </p>
             <div className="flex items-center gap-1">
                 <button onClick={() => go(1)} disabled={page <= 1} aria-label="Première page" className={btn}>
@@ -657,6 +868,7 @@ const ACCOUNT_CSV: CsvColumn<ZohoAccountRow>[] = [
     { header: 'Compte',             value: a => a.account_name },
     { header: 'Téléphone',          value: a => a.phone },
     { header: 'Site web',           value: a => a.website },
+    { header: 'Adresse',            value: a => a.billing_street },
     { header: 'Ville',              value: a => a.billing_city },
     { header: 'Province',           value: a => a.billing_state },
     { header: 'Code postal',        value: a => a.billing_code },
@@ -680,6 +892,9 @@ const ACCOUNT_CSV: CsvColumn<ZohoAccountRow>[] = [
     { header: 'Nb tâches',          value: a => a.nombre_taches },
     { header: 'Lien CRM',           value: a => a.zoho_crm_url },
 ];
+
+/** Where the period amount goes when the amount filter adds it: after the lifetime one. */
+const ACCOUNT_CSV_AMOUNT_AT = ACCOUNT_CSV.findIndex(c => c.header === 'Revenus (net)') + 1;
 
 const INVOICE_CSV: CsvColumn<LeadInvoiceRow>[] = [
     { header: 'Numéro',        value: i => i.invoice_number },

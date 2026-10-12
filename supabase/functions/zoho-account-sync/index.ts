@@ -51,12 +51,15 @@ const SB_HEADERS = {
 // the two can share a column without translation.
 const SERVICE_FIELD = 'Int_r_t_pour_quel_service_initialement';
 
-// 38 fields of the 70 Accounts exposes. Zoho caps `fields` at 50 per request, so
-// this has room but not unlimited room — anything added here should be something
-// the Comptes module actually reads.
+// 43 fields of the 70 Accounts exposes. Zoho caps `fields` at 50 per request, so
+// there are 7 left — anything added here should be something the Comptes module
+// actually reads.
 //
-// Left out on purpose: Shipping_* (duplicates Billing_* for a company that ships
-// nothing), the five zthrive* loyalty fields, Currency/Exchange_Rate (one
+// Shipping_* is read too: contacts carry no postal address of their own, so the
+// account's shipping address (billing when it has none) is where a contact is
+// reached by mail, and what the Meta audience upload matches on.
+//
+// Left out on purpose: the five zthrive* loyalty fields, Currency/Exchange_Rate (one
 // currency), Enrich_Status/Record_Status/Locked (Zoho housekeeping), and
 // NUM/WEB/PROM/DIST/AUTRE — the per-department currency fields are abandoned in
 // Zoho (LUMEN: $1.5M of Ventes_totales against NUM = 47.78, the rest null), and
@@ -64,6 +67,7 @@ const SERVICE_FIELD = 'Int_r_t_pour_quel_service_initialement';
 const ACCOUNT_FIELDS = [
   'id', 'Account_Name', 'Phone', 'Website', 'Description',
   'Billing_Street', 'Billing_City', 'Billing_State', 'Billing_Code', 'Billing_Country',
+  'Shipping_Street', 'Shipping_City', 'Shipping_State', 'Shipping_Code', 'Shipping_Country',
   'Owner', 'Created_Time', 'Modified_Time', 'Last_Activity_Time',
   'Origine_du_client', SERVICE_FIELD, 'Domaine_d_activit',
   'R_gion_administrative_du_client', 'R_gion_cible', 'Type_de_march',
@@ -315,6 +319,11 @@ function mapAccount(rec: Record<string, unknown>, repMap: Record<string, string>
     billing_state: pickOrNull(rec.Billing_State),
     billing_code: pickOrNull(rec.Billing_Code),
     billing_country: pickOrNull(rec.Billing_Country),
+    shipping_street: pickOrNull(rec.Shipping_Street),
+    shipping_city: pickOrNull(rec.Shipping_City),
+    shipping_state: pickOrNull(rec.Shipping_State),
+    shipping_code: pickOrNull(rec.Shipping_Code),
+    shipping_country: pickOrNull(rec.Shipping_Country),
 
     // Ownership. rep_name falls back to Zoho's own owner name when the address is
     // not in allowed_users — an ex-rep's accounts should keep showing a name

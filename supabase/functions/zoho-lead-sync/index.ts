@@ -40,12 +40,23 @@ const SB_HEADERS = {
 // accents in "Intérêt pour quel service initialement" into underscores.
 const SERVICE_FIELD = 'Int_r_t_pour_quel_service_initialement';
 
+// Reach fields, on both modules: what the Comptes export and the Meta audience
+// upload are built from. The job title is `Designation` on Leads and `Title` on
+// Contacts; Zoho labels both "Title". For the email opt-out see emailOptOut().
+const REACH_FIELDS = ['Mobile', 'Secondary_Email', 'Langue', 'Email_Opt_Out', 'Unsubscribed_Mode'];
+
+// The org's own marketing refusal checkbox and the mass-email bounce flag exist
+// on Contacts only.
+const NO_MARKETING_FIELD = 'Ne_veut_pas_recevoir_nos_courriels_marketing';
+const BOUNCED_FIELD = 'Email_de_masse_non_remis';
+
 const LEAD_FIELDS = [
   'id', 'Full_Name', 'First_Name', 'Last_Name', 'Company', 'Phone', 'Email',
   'Owner', 'Created_Time', 'Modified_Time',
   'Lead_Source', SERVICE_FIELD, 'Lead_Status',
   'Converted__s', 'Converted_Contact', 'Converted_Account', 'Converted_Deal',
   'Converted_Date_Time',
+  ...REACH_FIELDS, 'Designation',
 ].join(',');
 
 // Contacts has neither Lead_Source nor the service multiselect — the DB trigger
@@ -53,6 +64,7 @@ const LEAD_FIELDS = [
 const CONTACT_FIELDS = [
   'id', 'Full_Name', 'First_Name', 'Last_Name', 'Account_Name', 'Phone', 'Email',
   'Owner', 'Created_Time', 'Modified_Time',
+  ...REACH_FIELDS, 'Title', NO_MARKETING_FIELD, BOUNCED_FIELD,
 ].join(',');
 
 type Module = 'Leads' | 'Contacts';
@@ -305,6 +317,36 @@ function toStringArray(v: unknown): string[] {
   return [];
 }
 
+/** Text or null; Zoho writes "-None-" into a picklist that was never set. */
+function textOrNull(v: unknown): string | null {
+  if (typeof v !== 'string') return null;
+  const s = v.trim();
+  return s && s !== '-None-' ? s : null;
+}
+
+/**
+ * A checkbox Zoho returned, as a boolean. A field the record did not carry
+ * stays null rather than false: "not read" must not pass for "did not refuse".
+ */
+function boolOrNull(rec: Record<string, unknown>, field: string): boolean | null {
+  if (!(field in rec)) return null;
+  return rec[field] === true;
+}
+
+/**
+ * Unsubscribed from our emails. Zoho shows it two ways: the Email_Opt_Out
+ * checkbox, and Unsubscribed_Mode, which says how (unsubscribe link, Zoho
+ * Campaigns) and is set exactly when the person unsubscribed. The sync's login
+ * gets both on Leads, where they always agree, but Email_Opt_Out never comes
+ * back on Contacts (verified 2026-10-07: absent on 200 of 200), so reading the
+ * checkbox alone would leave every contact "unknown". Either one saying yes is
+ * a yes; either one present makes the answer known.
+ */
+function emailOptOut(rec: Record<string, unknown>): boolean | null {
+  if (!('Email_Opt_Out' in rec) && !('Unsubscribed_Mode' in rec)) return null;
+  return rec.Email_Opt_Out === true || textOrNull(rec.Unsubscribed_Mode) !== null;
+}
+
 function mapRecord(
   rec: Record<string, unknown>,
   module: Module,
@@ -333,6 +375,13 @@ function mapRecord(
     company,
     phone: (rec.Phone as string) ?? null,
     email: (rec.Email as string) ?? null,
+    mobile: textOrNull(rec.Mobile),
+    secondary_email: textOrNull(rec.Secondary_Email),
+    title: textOrNull(isLead ? rec.Designation : rec.Title),
+    language: textOrNull(rec.Langue),
+    email_opt_out: emailOptOut(rec),
+    no_marketing: isLead ? null : boolOrNull(rec, NO_MARKETING_FIELD),
+    email_bounced: isLead ? null : boolOrNull(rec, BOUNCED_FIELD),
 
     owner_name: owner.name ?? null,
     owner_email: owner.email ?? null,

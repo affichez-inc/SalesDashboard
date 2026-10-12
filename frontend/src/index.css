@@ -276,6 +276,57 @@
   .menu-in {
     animation: menu-in var(--duration-fast) var(--ease-out);
   }
+
+  /* Two native range inputs stacked on one track, for a min/max slider. Each
+     stays a real input - keyboard, focus and screen reader for free - and only
+     the thumbs take the pointer, so a click on the track is never stolen by
+     whichever input happens to be on top. The track and the filled span are
+     drawn by the component underneath. */
+  .range-dual {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    margin: 0;
+    appearance: none;
+    background: transparent;
+    pointer-events: none;
+  }
+  .range-dual::-webkit-slider-runnable-track { background: transparent; }
+  .range-dual::-moz-range-track { background: transparent; }
+  /* border-box on both engines, so a thumb is 1.25rem wide border included:
+     the component insets the track by half that, 0.625rem. */
+  .range-dual::-webkit-slider-thumb {
+    appearance: none;
+    pointer-events: auto;
+    cursor: grab;
+    box-sizing: border-box;
+    width: 1.25rem;
+    height: 1.25rem;
+    border-radius: var(--radius-pill);
+    background: white;
+    border: 2px solid var(--color-ink);
+    box-shadow: var(--shadow-1);
+  }
+  .range-dual::-moz-range-thumb {
+    pointer-events: auto;
+    cursor: grab;
+    box-sizing: border-box;
+    width: 1.25rem;
+    height: 1.25rem;
+    border-radius: var(--radius-pill);
+    background: white;
+    border: 2px solid var(--color-ink);
+    box-shadow: var(--shadow-1);
+  }
+  .range-dual:active::-webkit-slider-thumb { cursor: grabbing; }
+  .range-dual:focus-visible { outline: none; }
+  .range-dual:focus-visible::-webkit-slider-thumb {
+    box-shadow: 0 0 0 4px var(--color-ring);
+  }
+  .range-dual:focus-visible::-moz-range-thumb {
+    box-shadow: 0 0 0 4px var(--color-ring);
+  }
 }
 
 @keyframes menu-in {

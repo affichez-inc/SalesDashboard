@@ -1,0 +1,313 @@
+/*
+ * Colours, radii and buttons follow Zoho CRM's record page (measured on the
+ * Account detail view), so the card reads as part of the page around it.
+ * Colour carries meaning only: the relationship's temperature, a problem to
+ * act on, or the kind of figure.
+ */
+:root {
+  --ink: #202123;
+  --text: #313949;
+  --mute: #616e88;
+  --faint: #8b9ab9;
+  --line: #e6e9f2;
+  --line-strong: #d5d8e9;
+  --surface: #ffffff;
+  --surface-soft: #f7f8fc;
+  --chip: #f1f3f9;
+
+  --accent: #5464f2;
+  --accent-hover: #3f4fe0;
+  --accent-ink: #2f3cc0;
+  --accent-soft: #f0f1ff;
+  --accent-line: #c9cefb;
+  --primary: linear-gradient(180deg, #5767f6 4.69%, #124dc3 100%);
+  --primary-hover: linear-gradient(180deg, #4b5cf0 4.69%, #0f43ad 100%);
+  --ring: rgba(84, 100, 242, 0.35);
+
+  /* Temperature and status tones */
+  --hot: #f0612b;        --hot-ink: #b13a0c;      --hot-soft: #fff1ea;      --hot-line: #fcd3c0;
+  --good: #22a447;       --good-ink: #17703a;     --good-soft: #eaf7ee;     --good-line: #bfe6cb;
+  --warn: #f2a516;       --warn-ink: #8f5600;     --warn-soft: #fff6e2;     --warn-line: #f8dda4;
+  --cold: #2f7fe8;       --cold-ink: #1b57ad;     --cold-soft: #ebf3ff;     --cold-line: #c3dafa;
+  --idle: #8b9ab9;       --idle-ink: #4a5875;     --idle-soft: #f1f3f9;     --idle-line: #dde2ee;
+  --critical: #e5484d;   --critical-ink: #b42328; --critical-soft: #fdeded; --critical-line: #f6c4c5;
+
+  /* Figure kinds */
+  --k-indigo: #5464f2;   --k-indigo-soft: #eef0ff;
+  --k-teal: #0f9488;     --k-teal-soft: #e5f6f4;
+  --k-violet: #8a54e8;   --k-violet-soft: #f3edff;
+  --k-amber: #d1840a;    --k-amber-soft: #fff4df;
+  --k-blue: #2f7fe8;     --k-blue-soft: #ebf3ff;
+  --k-green: #1f9d4c;    --k-green-soft: #e8f7ee;
+  --k-slate: #4a5875;    --k-slate-soft: #eef1f9;
+
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+  --radius-xl: 10px;
+  --radius-pill: 9999px;
+  --font: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  background: var(--surface);
+  color: var(--text);
+  font: 400 13px/1.5 var(--font);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Zoho draws the related-list frame edge to edge: the inset matches its title. */
+#root { padding: 6px 20px 18px; }
+
+.card { display: flex; flex-direction: column; gap: 16px; }
+.card.is-busy .body { opacity: 0.45; pointer-events: none; }
+.body { display: flex; flex-direction: column; gap: 16px; }
+.ico { display: inline-flex; line-height: 0; flex: none; }
+.ico svg { width: 100%; height: 100%; }
+
+/* Tone classes set the four colours a toned element reads. */
+.t-hot { --tone: var(--hot); --tone-ink: var(--hot-ink); --tone-soft: var(--hot-soft); --tone-line: var(--hot-line); }
+.t-good { --tone: var(--good); --tone-ink: var(--good-ink); --tone-soft: var(--good-soft); --tone-line: var(--good-line); }
+.t-warn { --tone: var(--warn); --tone-ink: var(--warn-ink); --tone-soft: var(--warn-soft); --tone-line: var(--warn-line); }
+.t-cold { --tone: var(--cold); --tone-ink: var(--cold-ink); --tone-soft: var(--cold-soft); --tone-line: var(--cold-line); }
+.t-idle { --tone: var(--idle); --tone-ink: var(--idle-ink); --tone-soft: var(--idle-soft); --tone-line: var(--idle-line); }
+.t-critical { --tone: var(--critical); --tone-ink: var(--critical-ink); --tone-soft: var(--critical-soft); --tone-line: var(--critical-line); }
+
+/* ── Header: the temperature, why, and when ─────────────────────────────── */
+.hero {
+  display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+  padding: 14px 16px;
+  border: 1px solid var(--tone-line);
+  border-radius: var(--radius-xl);
+  background: var(--tone-soft);
+}
+.hero-icon {
+  width: 42px; height: 42px; flex: none;
+  display: grid; place-items: center;
+  border-radius: var(--radius-xl);
+  background: var(--tone); color: #ffffff;
+  box-shadow: 0 2px 6px rgba(32, 33, 35, 0.12);
+}
+.hero-icon .ico { width: 22px; height: 22px; }
+.hero-text { flex: 1 1 320px; min-width: 0; }
+.hero-kicker { color: var(--tone-ink); font-size: 11px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; opacity: 0.85; }
+.hero-title { color: var(--tone-ink); font-size: 18px; font-weight: 700; line-height: 1.3; }
+.hero-reason { margin: 2px 0 0; color: var(--text); font-size: 13px; line-height: 1.5; }
+.hero-side { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; justify-content: flex-end; margin-left: auto; }
+.updated { color: var(--mute); font-size: 12px; white-space: nowrap; }
+
+/* ── Problems to act on ──────────────────────────────────────────────────── */
+.signals { display: flex; flex-wrap: wrap; gap: 8px; }
+.signal {
+  display: inline-flex; align-items: center; gap: 7px;
+  padding: 6px 12px;
+  border: 1px solid var(--tone-line);
+  border-radius: var(--radius-pill);
+  background: var(--tone-soft); color: var(--tone-ink);
+  font-size: 12.5px; font-weight: 600;
+}
+.signal .ico { width: 15px; height: 15px; color: var(--tone); }
+
+/* ── Figures ─────────────────────────────────────────────────────────────── */
+/*
+ * Wide frame: the seven figures on one row. Otherwise two full rows, activity
+ * (four) over business (three), on a 12-column grid so both rows end flush.
+ */
+.kpis { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); gap: 8px; }
+.kpi {
+  grid-column: span 3;
+  display: flex; align-items: flex-start; gap: 10px; min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+}
+.kpi.is-deal { grid-column: span 4; }
+@media (min-width: 1240px) {
+  .kpis { grid-template-columns: repeat(7, minmax(0, 1fr)); }
+  .kpi, .kpi.is-deal { grid-column: auto; }
+}
+@media (max-width: 640px) {
+  .kpi, .kpi.is-deal { grid-column: span 6; }
+}
+.kpi-icon {
+  width: 30px; height: 30px; flex: none;
+  display: grid; place-items: center;
+  border-radius: var(--radius-lg);
+  background: var(--kind-soft); color: var(--kind);
+}
+.kpi-icon .ico { width: 16px; height: 16px; }
+.kpi-text { min-width: 0; }
+.kpi-label { color: var(--mute); font-size: 11.5px; line-height: 1.35; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.kpi-value { color: var(--ink); font-size: 16px; font-weight: 700; line-height: 1.35; font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.kpi-sub { color: var(--faint); font-size: 11.5px; line-height: 1.35; }
+.kpi-sub .is-alert { color: var(--critical-ink); font-weight: 600; }
+.kpi.is-zero .kpi-icon { background: var(--chip); color: var(--faint); }
+.kpi.is-zero .kpi-value { color: var(--faint); font-weight: 600; }
+.kpi.is-alert { border-color: var(--critical-line); }
+
+.k-indigo { --kind: var(--k-indigo); --kind-soft: var(--k-indigo-soft); }
+.k-teal { --kind: var(--k-teal); --kind-soft: var(--k-teal-soft); }
+.k-violet { --kind: var(--k-violet); --kind-soft: var(--k-violet-soft); }
+.k-amber { --kind: var(--k-amber); --kind-soft: var(--k-amber-soft); }
+.k-blue { --kind: var(--k-blue); --kind-soft: var(--k-blue-soft); }
+.k-green { --kind: var(--k-green); --kind-soft: var(--k-green-soft); }
+.k-slate { --kind: var(--k-slate); --kind-soft: var(--k-slate-soft); }
+
+/* ── The synthesis ───────────────────────────────────────────────────────── */
+.synth {
+  padding: 14px 18px 15px;
+  border: 1px solid #e1e4fd;
+  border-left: 3px solid var(--accent);
+  border-radius: var(--radius-xl);
+  background: #f6f7ff;
+}
+.synth-head { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; color: var(--accent-ink); font-size: 11.5px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; }
+.synth-head .ico { width: 14px; height: 14px; color: var(--accent); }
+.synth-text { margin: 0; color: var(--ink); font-size: 14px; line-height: 1.7; }
+
+/* ── Key points and next steps ───────────────────────────────────────────── */
+.cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px 28px; align-items: start; }
+.panel-head { display: flex; align-items: center; gap: 8px; margin: 0 0 6px; padding-bottom: 8px; border-bottom: 1px solid var(--line); }
+.panel-title { margin: 0; color: var(--ink); font-size: 13.5px; font-weight: 700; }
+.count { min-width: 20px; padding: 0 7px; border-radius: var(--radius-pill); background: var(--chip); color: var(--mute); font-size: 11.5px; font-weight: 600; line-height: 20px; text-align: center; }
+.list { list-style: none; margin: 0; padding: 0; }
+
+.point { display: grid; grid-template-columns: 24px 1fr; gap: 10px; padding: 10px 0; border-bottom: 1px solid var(--line); }
+.point:last-child { border-bottom: 0; padding-bottom: 0; }
+.point-icon { width: 24px; height: 24px; display: grid; place-items: center; border-radius: var(--radius-pill); background: var(--tone-soft); color: var(--tone); }
+.point-icon .ico { width: 14px; height: 14px; }
+.point-text { color: var(--text); font-size: 13.5px; line-height: 1.55; padding-top: 2px; }
+
+.steps { display: grid; gap: 10px; padding-top: 4px; }
+.step {
+  display: grid; grid-template-columns: 26px 1fr; gap: 10px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-xl);
+  background: var(--surface);
+  box-shadow: 0 1px 2px rgba(32, 33, 35, 0.04);
+}
+.step.is-done { border-color: var(--good-line); background: #fbfefc; }
+.step-num { width: 24px; height: 24px; display: grid; place-items: center; border-radius: var(--radius-pill); background: var(--accent-soft); color: var(--accent); font-size: 12px; font-weight: 700; }
+.step.is-done .step-num { background: var(--good-soft); color: var(--good); }
+.step-num .ico { width: 13px; height: 13px; }
+.step-title { color: var(--ink); font-size: 13.5px; font-weight: 600; line-height: 1.45; padding-top: 2px; }
+.step-meta { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 7px; }
+.step-foot { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; margin-top: 10px; }
+.step-foot .srcs { margin-top: 0; }
+.empty-note { margin: 10px 0 0; color: var(--faint); font-size: 12.5px; }
+
+/* Small labelled chips: due date, contact, sources */
+.tag {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 2px 9px;
+  border-radius: var(--radius-pill);
+  background: var(--chip); color: var(--mute);
+  font-size: 12px; line-height: 20px; white-space: nowrap;
+}
+.tag .ico { width: 13px; height: 13px; color: var(--faint); }
+.tag.t-warn { background: var(--warn-soft); color: var(--warn-ink); }
+.tag.t-warn .ico { color: var(--warn); }
+
+.srcs { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
+.src {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 1px 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-pill);
+  background: var(--surface); color: var(--mute);
+  font: 500 11.5px/18px var(--font);
+  cursor: pointer;
+  transition: border-color 150ms, color 150ms, background 150ms;
+}
+.src .ico { width: 12px; height: 12px; color: var(--faint); }
+.src:hover { border-color: var(--accent-line); background: var(--accent-soft); color: var(--accent-ink); }
+.src:hover .ico { color: var(--accent); }
+.src:focus-visible { outline: 2px solid var(--ring); outline-offset: 1px; }
+
+/* ── Footer ──────────────────────────────────────────────────────────────── */
+.foot {
+  display: flex; align-items: center; justify-content: space-between; gap: 6px 16px; flex-wrap: wrap;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+  color: var(--faint); font-size: 12px;
+}
+.foot-ai { display: inline-flex; align-items: center; gap: 5px; margin-left: auto; white-space: nowrap; }
+.foot-ai .ico { width: 13px; height: 13px; color: var(--accent); }
+
+/* ── Buttons, as Zoho draws them ─────────────────────────────────────────── */
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  height: 32px; padding: 0 14px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-md);
+  background: var(--surface); color: var(--text);
+  font: 600 13px/1 var(--font);
+  cursor: pointer; white-space: nowrap;
+  transition: background 150ms, border-color 150ms, color 150ms, box-shadow 150ms;
+}
+.btn .ico { width: 15px; height: 15px; }
+.btn:focus-visible { outline: 3px solid var(--ring); outline-offset: 1px; }
+.btn:disabled { cursor: default; opacity: 0.6; }
+.btn-primary { border-color: transparent; background: var(--primary); color: #ffffff; box-shadow: 0 1px 2px rgba(18, 77, 195, 0.25); }
+.btn-primary:hover:not(:disabled) { background: var(--primary-hover); box-shadow: 0 2px 6px rgba(18, 77, 195, 0.3); }
+.btn-outline { border-color: var(--accent-line); background: var(--surface); color: var(--accent); }
+.btn-outline:hover:not(:disabled) { border-color: var(--accent); background: var(--accent-soft); color: var(--accent-hover); }
+.btn-sm { height: 30px; padding: 0 12px; font-size: 12.5px; }
+.btn-done { border-color: var(--good-line); background: var(--good-soft); color: var(--good-ink); }
+.btn-done .ico { color: var(--good); }
+.btn-done:hover:not(:disabled) { border-color: var(--good); }
+
+/* ── Loading, empty and error states ─────────────────────────────────────── */
+.empty { display: flex; flex-direction: column; align-items: center; text-align: center; padding: 18px 12px 8px; }
+.empty-icon {
+  width: 48px; height: 48px;
+  display: grid; place-items: center;
+  border-radius: var(--radius-xl);
+  background: var(--primary); color: #ffffff;
+  box-shadow: 0 4px 12px rgba(18, 77, 195, 0.25);
+}
+.empty-icon .ico { width: 24px; height: 24px; }
+.empty-title { margin-top: 12px; color: var(--ink); font-size: 15px; font-weight: 700; }
+.empty-sub { margin: 4px 0 12px; max-width: 560px; color: var(--mute); font-size: 13px; }
+.empty-kinds { display: flex; flex-wrap: wrap; justify-content: center; gap: 6px; margin-bottom: 16px; }
+.empty .running { justify-content: center; }
+
+.running {
+  display: flex; align-items: center; gap: 10px;
+  padding: 10px 14px;
+  border: 1px solid var(--accent-line);
+  border-radius: var(--radius-lg);
+  background: var(--accent-soft); color: var(--accent-ink);
+  font-size: 12.5px; font-weight: 500;
+}
+.spinner {
+  width: 16px; height: 16px; flex: none;
+  border: 2px solid var(--accent-line);
+  border-top-color: var(--accent);
+  border-radius: var(--radius-pill);
+  animation: spin 0.9s linear infinite;
+}
+.btn .spinner { width: 14px; height: 14px; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.loading { display: flex; align-items: center; gap: 10px; padding: 10px 0; color: var(--mute); font-size: 12.5px; }
+.alert {
+  display: flex; align-items: flex-start; gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--critical-line);
+  border-radius: var(--radius-lg);
+  background: var(--critical-soft); color: var(--critical-ink);
+  font-size: 12.5px;
+}
+.alert .ico { width: 15px; height: 15px; margin-top: 1px; color: var(--critical); }
+.notice { display: flex; align-items: flex-start; gap: 8px; color: var(--warn-ink); font-size: 12px; }
+.notice .ico { width: 14px; height: 14px; margin-top: 1px; color: var(--warn); }
+
+@media (prefers-reduced-motion: reduce) {
+  .spinner { animation-duration: 3s; }
+}

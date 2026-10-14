@@ -3,6 +3,8 @@
 // Incremental: pg_cron every 5 min, uses last_modified_time filter (fast, 0-10 records)
 // Full sync:   manual button in Settings with x-full-sync: true header
 //              Uses date_start=2025-01-01 so only 2025+ data is fetched (fits in 150s)
+// Overdue:     at most once an hour (and on every full sync, or x-overdue-check: true),
+//              re-reads Books' overdue list; see reconcileOverdue
 
 const ORGS = [
   { id: Deno.env.get('ZOHO_ORG_ID_QC') ?? '48244978', office: 'QC' },
@@ -275,6 +277,44 @@ async function lookupDeptByInvoiceNumber(
 
 // ─── Sync Invoices ────────────────────────────────────────────────────────────
 
+/** The row stored for one invoice of a Books list page; null for a status the table does not keep. */
+function invoiceRow(inv: Record<string, unknown>, office: string): Record<string, unknown> | null {
+  const rawStatus = ((inv.status as string) ?? '').toLowerCase().replace(/_/g, '');
+  const mappedStatus = STATUS_MAP[rawStatus];
+  if (!mappedStatus) return null;
+  // An unrecognised department no longer throws the record away. Before
+  // this, `continue` meant an invoice whose department Zoho reported under
+  // a name DEPT_MAP does not know vanished with no error and no log -
+  // harmless while the six live labels are all mapped, and a silent hole
+  // in the revenue the day somebody adds a seventh. The row now lands with
+  // a null department, keeps Zoho's raw label, and shows up in
+  // get_unmapped_department_summary so the mapping can be fixed.
+  const dept = extractDept(inv);
+  return {
+    zoho_id: String(inv.invoice_id),
+    invoice_number: inv.invoice_number,
+    client_name: inv.customer_name,
+    // The Books customer behind this invoice. A DB trigger turns it into
+    // crm_account_id once zoho-books-customer-link has resolved that
+    // customer, which is what ties an invoice to a CRM contact.
+    books_customer_id: String(inv.customer_id ?? '') || null,
+    amount: Math.round((Number(inv.total) / 1.14975) * 100) / 100,
+    rep_name: (inv.salesperson_name as string)?.trim() || null,
+    // Who keyed the invoice in, which is routinely NOT the salesperson:
+    // the first record sampled on 2026-09-07 was created_by "Morgane
+    // Owczarzak" with salesperson "Dominic Letendre". Free - Zoho puts it
+    // on the list payload, unlike estimates, which need a detail call
+    // each (see zoho-quote-creator-sync).
+    created_by_name: (inv.created_by as string)?.trim() || null,
+    zoho_department_label: dept?.label ?? rawDeptLabel(inv),
+    department: dept?.mapped ?? null,
+    office,
+    invoice_date: inv.date,
+    status: mappedStatus,
+    is_avoir: false,
+  };
+}
+
 async function syncInvoices(
   org: { id: string; office: string },
   accessToken: string,
@@ -334,41 +374,10 @@ async function syncInvoices(
 
       const toUpsert: object[] = [];
       for (const inv of invoices) {
-        const rawStatus = ((inv.status as string) ?? '').toLowerCase().replace(/_/g, '');
-        const mappedStatus = STATUS_MAP[rawStatus];
-        if (!mappedStatus) continue;
-        // An unrecognised department no longer throws the record away. Before
-        // this, `continue` meant an invoice whose department Zoho reported under
-        // a name DEPT_MAP does not know vanished with no error and no log -
-        // harmless while the six live labels are all mapped, and a silent hole
-        // in the revenue the day somebody adds a seventh. The row now lands with
-        // a null department, keeps Zoho's raw label, and shows up in
-        // get_unmapped_department_summary so the mapping can be fixed.
-        const dept = extractDept(inv);
+        const row = invoiceRow(inv, org.office);
+        if (!row) continue;
         touched.add(String(inv.invoice_number));
-        toUpsert.push({
-          zoho_id: String(inv.invoice_id),
-          invoice_number: inv.invoice_number,
-          client_name: inv.customer_name,
-          // The Books customer behind this invoice. A DB trigger turns it into
-          // crm_account_id once zoho-books-customer-link has resolved that
-          // customer, which is what ties an invoice to a CRM contact.
-          books_customer_id: String(inv.customer_id ?? '') || null,
-          amount: Math.round((Number(inv.total) / 1.14975) * 100) / 100,
-          rep_name: (inv.salesperson_name as string)?.trim() || null,
-          // Who keyed the invoice in, which is routinely NOT the salesperson:
-          // the first record sampled on 2026-09-07 was created_by "Morgane
-          // Owczarzak" with salesperson "Dominic Letendre". Free - Zoho puts it
-          // on the list payload, unlike estimates, which need a detail call
-          // each (see zoho-quote-creator-sync).
-          created_by_name: (inv.created_by as string)?.trim() || null,
-          zoho_department_label: dept?.label ?? rawDeptLabel(inv),
-          department: dept?.mapped ?? null,
-          office: org.office,
-          invoice_date: inv.date,
-          status: mappedStatus,
-          is_avoir: false,
-        });
+        toUpsert.push(row);
       }
 
       if (toUpsert.length > 0) { await upsertBatch(toUpsert); upserted += toUpsert.length; }
@@ -477,6 +486,108 @@ async function syncCreditNotes(
   }
 
   return { upserted, errors };
+}
+
+// ─── Overdue Status ───────────────────────────────────────────────────────────
+// Books turns an invoice overdue once its due date passes without touching
+// last_modified_time, so the incremental sync never reads it again and the row
+// keeps `sent`. Measured 2026-10-13: 63 of the 201 invoices Books listed as
+// overdue were still `sent` here. This pass reads Books' overdue list (a page or
+// two per org) and writes those rows. A row stored as overdue that Books no
+// longer lists (paid, due date moved, voided) is read back one by one.
+
+const OVERDUE_CHECK_KEY = 'invoices_overdue';
+const OVERDUE_CHECK_EVERY_MS = 60 * 60 * 1000;
+/** Detail reads per org and pass; the rest wait for the next pass. */
+const OVERDUE_RECHECK_MAX = 25;
+
+async function setInvoiceStatus(zohoId: string, status: string): Promise<void> {
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/invoices?zoho_id=eq.${encodeURIComponent(zohoId)}`, {
+    method: 'PATCH',
+    headers: SB_HEADERS,
+    body: JSON.stringify({ status }),
+  });
+  if (!res.ok) throw new Error('Supabase status update failed: ' + await res.text());
+}
+
+async function reconcileOverdue(
+  org: { id: string; office: string },
+  accessToken: string,
+  touched: Set<string>,
+): Promise<{ complete: boolean; marked: number; cleared: number; errors: string[] }> {
+  const errors: string[] = [];
+  const listed: Record<string, unknown>[] = [];
+  for (let page = 1; ; page++) {
+    // filter_by alone: Zoho drops a date range sent beside it.
+    const url = `https://www.zohoapis.com/books/v3/invoices` +
+      `?organization_id=${org.id}&filter_by=Status.OverDue&page=${page}&per_page=200`;
+    const response = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}` } });
+    if (!response.ok) {
+      // A partial list would read as "no longer overdue" below: stop here.
+      errors.push(`${org.office} overdue p.${page}: ${await response.text()}`);
+      return { complete: false, marked: 0, cleared: 0, errors };
+    }
+    const data = await response.json();
+    listed.push(...(data.invoices ?? []));
+    if (!(data.page_context as Record<string, boolean>)?.has_more_page) break;
+  }
+
+  // Paged until an empty page: a bare select stops at PostgREST's row cap.
+  const stored = new Set<string>();
+  for (let offset = 0; ; offset += 1000) {
+    const res = await fetch(
+      `${SUPABASE_URL}/rest/v1/invoices?select=zoho_id&office=eq.${org.office}` +
+        `&status=eq.overdue&is_avoir=is.false&order=zoho_id.asc&limit=1000&offset=${offset}`,
+      { headers: SB_HEADERS },
+    );
+    if (!res.ok) throw new Error('Overdue scan failed: ' + await res.text());
+    const page = await res.json() as Array<{ zoho_id: string }>;
+    if (page.length === 0) break;
+    for (const r of page) stored.add(r.zoho_id);
+  }
+  const listedIds = new Set(listed.map((inv) => String(inv.invoice_id)));
+
+  // The list payload is the one the incremental sync stores, so the whole row is
+  // written: an overdue invoice the table has never seen lands too.
+  const rows: object[] = [];
+  for (const inv of listed) {
+    const row = invoiceRow(inv, org.office);
+    if (!row) continue;
+    touched.add(String(inv.invoice_number));
+    rows.push(row);
+  }
+  for (let i = 0; i < rows.length; i += 200) await upsertBatch(rows.slice(i, i + 200));
+  const marked = [...listedIds].filter((id) => !stored.has(id)).length;
+
+  // The detail payload lacks fields the list carries (created_by), so only the
+  // status is written back. A record Books no longer has is left to the reaper.
+  let cleared = 0;
+  const stale = [...stored].filter((id) => !listedIds.has(id));
+  for (const id of stale.slice(0, OVERDUE_RECHECK_MAX)) {
+    const response = await fetch(
+      `https://www.zohoapis.com/books/v3/invoices/${id}?organization_id=${org.id}`,
+      { headers: { Authorization: `Bearer ${accessToken}` } },
+    );
+    if (!response.ok) {
+      errors.push(`${org.office} overdue recheck ${id}: HTTP ${response.status}`);
+      await response.body?.cancel();
+      continue;
+    }
+    const inv = ((await response.json()).invoice ?? {}) as Record<string, unknown>;
+    const raw = String(inv.status ?? '').toLowerCase().replace(/_/g, '');
+    const status = raw === 'void' ? 'void' : STATUS_MAP[raw];
+    if (!status || status === 'overdue') {
+      errors.push(`${org.office} overdue recheck ${id}: Books status "${inv.status}" left as is`);
+      continue;
+    }
+    await setInvoiceStatus(id, status);
+    cleared++;
+  }
+  if (stale.length > OVERDUE_RECHECK_MAX) {
+    errors.push(`${org.office} overdue recheck: ${stale.length - OVERDUE_RECHECK_MAX} left for the next pass`);
+  }
+
+  return { complete: true, marked, cleared, errors };
 }
 
 // ─── Duplicate Reaper ─────────────────────────────────────────────────────────
@@ -622,7 +733,7 @@ Deno.serve(async (req: Request) => {
     'Access-Control-Allow-Origin': '*',
     'Access-Control-Allow-Headers':
       'authorization, x-sync-source, x-full-sync, x-org, x-status, x-date-start, x-probe, ' +
-      'x-date-end, x-prune, x-prune-only, x-dry-run, content-type',
+      'x-date-end, x-prune, x-prune-only, x-dry-run, x-overdue-check, content-type',
   };
   if (req.method === 'OPTIONS') return new Response(null, { headers: corsHeaders });
 
@@ -754,6 +865,8 @@ Deno.serve(async (req: Request) => {
   const isPruneOnly = req.headers.get('x-prune-only') === 'true';
   const skipPrune = req.headers.get('x-prune') === 'false';
   const isDryRun = req.headers.get('x-dry-run') === 'true';
+  // x-overdue-check: true runs the overdue pass now instead of waiting for the hour.
+  const forceOverdueCheck = req.headers.get('x-overdue-check') === 'true';
   const action = isPruneOnly
     ? 'prune_invoice_duplicates'
     : isManual
@@ -761,6 +874,7 @@ Deno.serve(async (req: Request) => {
     : 'sync_invoices_auto';
 
   let totalUpserted = 0;
+  const overdue = { checked: false, marked: 0, cleared: 0 };
   let pruneResult: { deleted: string[]; skipped: string[] } = { deleted: [], skipped: [] };
   const allErrors: string[] = [];
 
@@ -789,6 +903,28 @@ Deno.serve(async (req: Request) => {
         totalUpserted += cnResult.upserted;
         allErrors.push(...cnResult.errors);
       }
+
+      // Overdue pass, isolated like the reaper below: its failure must not fail
+      // the sync. The hourly pointer moves only after a clean pass over both orgs.
+      try {
+        const due = forceOverdueCheck || isFullSync ||
+          Date.now() - (await readSyncState(OVERDUE_CHECK_KEY)).getTime() >= OVERDUE_CHECK_EVERY_MS;
+        if (due) {
+          const checkStart = new Date();
+          let clean = true;
+          for (const org of orgsToProcess) {
+            const r = await reconcileOverdue(org, accessToken, touched);
+            overdue.marked += r.marked;
+            overdue.cleared += r.cleared;
+            if (!r.complete) clean = false;
+            allErrors.push(...r.errors);
+          }
+          overdue.checked = true;
+          if (clean && !orgFilter) await writeSyncState(OVERDUE_CHECK_KEY, checkStart);
+        }
+      } catch (err) {
+        allErrors.push('overdue: ' + (err instanceof Error ? err.message : String(err)));
+      }
     }
 
     // Reap rows for invoices that were deleted in Zoho and re-issued under the same
@@ -812,6 +948,9 @@ Deno.serve(async (req: Request) => {
     const durationMs = Date.now() - startTime;
     const result = {
       upserted: totalUpserted,
+      overdue_checked: overdue.checked,
+      overdue_marked: overdue.marked,
+      overdue_cleared: overdue.cleared,
       pruned: isDryRun ? 0 : pruneResult.deleted.length,
       prune_dry_run: isDryRun,
       prune_deleted: pruneResult.deleted,

@@ -385,12 +385,23 @@ A full sync with `x-date-start: 2021-01-01` also pulled in ~4,000 invoices from
 2021-22 that the old window had never covered. They are kept; they carry no
 department because Zoho has none on them.
 
-Two Zoho API quirks are worth knowing before touching `zoho-invoice-sync`:
+Four Zoho API quirks are worth knowing before touching `zoho-invoice-sync`:
 
 - Books list endpoints filter dates with `date_start` / `date_end`. The dotted
   form `date.start` is accepted and **silently ignored**.
 - `date_start` and `filter_by` are mutually exclusive — send both and the date
-  range is dropped without an error.
+  range is dropped without an error. **`zcrm_account_id` behaves the same**
+  (verified 2026-10-13): alone it returns exactly one CRM account's estimates or
+  invoices; with `filter_by=Status.OverDue` beside it, the whole org's overdue
+  list comes back. `customer_id` + `filter_by` does filter.
+- **Books turns an invoice overdue without changing its `last_modified_time`**,
+  so the incremental sync never re-reads it and the row stays `sent`. Measured
+  2026-10-13: 63 of Books' 201 overdue invoices were `sent` here. The sync
+  therefore re-reads `filter_by=Status.OverDue` at most once an hour
+  (`reconcileOverdue`, pointer `sync_state.invoices_overdue`; `x-overdue-check:
+  true` forces it) and reads back, one by one, any row it holds as overdue that
+  Books no longer lists. Payments do modify the record, so the reverse drift
+  does not happen through the normal path.
 
 ### Invoices on a lead or contact
 
@@ -412,7 +423,10 @@ zoho_books_customers.crm_account_id ◀── Books contact.zcrm_account_id
         │                                 (zoho-invoice-sync)
 ```
 
-`zoho_books_customers` is a cache of the one hop that costs an API call, filled a
+`zoho_books_customers` holds only customers that appear on an invoice, so a client
+that has been quoted but never billed has no row there; to reach a CRM account's
+quotes, ask Books with `zcrm_account_id` instead (`account-summary` does both).
+It is a cache of the one hop that costs an API call, filled a
 slice at a time under Zoho's 100-calls/minute/org limit by the
 `zoho-books-customer-link` function (cron, every 30 min). Two triggers keep
 `invoices.crm_account_id` in step in both directions, so neither sync needs to

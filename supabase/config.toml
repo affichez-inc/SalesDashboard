@@ -415,6 +415,11 @@ verify_jwt = false
 [functions.weekly-mandates-report]
 verify_jwt = false
 
+# Called by the Zoho CRM widget through a Zoho Connection, which sends no
+# Supabase JWT. The function checks the x-summary-key header itself.
+[functions.account-summary]
+verify_jwt = false
+
 [analytics]
 enabled = true
 port = 54327

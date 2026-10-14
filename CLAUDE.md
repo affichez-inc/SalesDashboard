@@ -480,7 +480,11 @@ Migration `20261007120000_account_spend_and_contact_reach.sql`, function
   sends the account ids to `meta-custom-audience`, which reads the contacts with
   the caller's token, normalises and SHA-256 hashes email, phone, names, city,
   province, postal code and country (`normalize.ts`), creates a customer-list
-  audience on `META_AUDIENCE_AD_ACCOUNT_ID` and uploads in one session. **The
+  audience on the ad account chosen in the dialog and uploads in one session.
+  The accounts on offer are `META_AUDIENCE_AD_ACCOUNT_ID` (a comma-separated
+  list, default first), else every account in `META_AD_ACCOUNT_ID`: today
+  Affichez and La boutique Promo. The function refuses an id outside that list,
+  and `meta_audience_log.ad_account_id` records where each audience went. **The
   dialog sends every contact with an email or a phone, marketing refusals
   included** (`exclude_opted_out: false`, a business decision). The function
   still honours the flag for another
@@ -503,11 +507,15 @@ Migration `20261007120000_account_spend_and_contact_reach.sql`, function
   an EMPTY page, not a short one, so a lower server row cap cannot truncate it.
 - The create call is retried only on throttling codes, never on a 5xx: a retry
   after a create that did succeed would leave a second, empty audience. The token
-  needs `ads_management`, the system user full control of the ad account, and a
-  human admin must have accepted the Custom Audience terms. Only an explicit
-  permission list without `ads_management` blocks the dialog. The terms flag is
-  not shown: Meta's own refusal at create time (1870034) is the real test, and the
-  error it returns says the terms must be accepted.
+  needs `ads_management`, the system user full control of each ad account, and a
+  human admin must have accepted the Custom Audience terms on each. Only an explicit
+  permission list without `ads_management` blocks the whole dialog. One account is
+  greyed out, with the reason, when the system user has no `MANAGE` or `ADVERTISE`
+  task on it: Meta then leaves `user_tasks` out, although the account stays
+  readable through the business (spend, audience list), and `me/adaccounts` does
+  not list it. The terms flag is not shown: Meta's own refusal at create time
+  (1870034) is the real test, and the error it returns says the terms must be
+  accepted. A fresh acceptance can take a minute to show in `tos_accepted`.
 - **Avoid amounts in an audience name.** Meta blocks audiences whose name or
   description suggests financial status, which is why the default name is just
   "Comptes Affichez <date>".

@@ -1,7 +1,7 @@
 // Collects everything the summary is built from, for one CRM account.
 //
 //   Supabase mirror  account profile, contacts, invoices, Books customer links
-//   Zoho CRM         emails (per contact), notes, tasks, calls, meetings, users
+//   Zoho CRM         emails (per contact), notes, tasks, meetings, users
 //   Zoho Books       quotes of every status (the `sales` mirror has no account link)
 //
 // Activity is read over WINDOW_MONTHS. Invoices are read whole, for yearly totals.
@@ -95,16 +95,6 @@ export interface TaskItem {
   description: string | null;
 }
 
-export interface CallItem {
-  id: string;
-  type: 'in' | 'out' | 'missed';
-  start: string;
-  durationSec: number;
-  owner: string | null;
-  contactName: string | null;
-  recorded: boolean;
-}
-
 export interface MeetingItem {
   id: string;
   title: string;
@@ -165,7 +155,6 @@ export interface Dossier {
   emailCounts: { listed: number; bulk: number };
   notes: NoteItem[];
   tasks: TaskItem[];
-  calls: CallItem[];
   meetings: MeetingItem[];
   quotes: QuoteItem[];
   invoices: InvoiceItem[];
@@ -216,16 +205,6 @@ interface RawTask {
   Created_By: Lookup | null;
   Who_Id: Lookup | null;
   Description: string | null;
-}
-
-interface RawCall {
-  id: string;
-  Call_Type: string | null;
-  Call_Start_Time: string;
-  Call_Duration_in_seconds: number | null;
-  Owner: Lookup | null;
-  Who_Id: Lookup | null;
-  Voice_Recording__s: string | null;
 }
 
 interface RawEvent {
@@ -531,10 +510,9 @@ export async function gatherDossier(accountId: string, db: Db): Promise<Dossier>
   // Everything that only needs the contact list starts at once. Notes wait for
   // the tasks: they are also written on tasks, so the task ids feed that query.
   const taskFields = 'Subject, Status, Due_Date, Created_Time, Closed_Time, Owner, Created_By, Who_Id, Description';
-  const callFields = 'Call_Type, Call_Start_Time, Call_Duration_in_seconds, Owner, Who_Id, Voice_Recording__s';
   const eventFields = 'Event_Title, Start_DateTime, End_DateTime, Owner, Who_Id, Description';
   const byContacts = <T>(query: string): Promise<T[]> => (contactIdList ? coql<T>(query) : Promise.resolve([]));
-  // Calls, meetings and notes: a failed read leaves a warning on the card, not a failed summary.
+  // Meetings and notes: a failed read leaves a warning on the card, not a failed summary.
   const soft = <T>(label: string, p: Promise<T[]>): Promise<T[]> => p.catch((err) => {
     warnings.push(`${label} non lus (${err instanceof Error ? err.message : err}).`);
     return [] as T[];
@@ -546,8 +524,6 @@ export async function gatherDossier(accountId: string, db: Db): Promise<Dossier>
     byContacts<RawTask>(`select ${taskFields} from Tasks where Who_Id in (${contactIdList}) order by Created_Time desc limit 2000`),
   ]);
   const activityP = Promise.all([
-    soft('Appels', coql<RawCall>(`select ${callFields} from Calls where What_Id = ${accountLit} and Call_Start_Time >= '${sinceCoql}' order by Call_Start_Time desc limit 2000`)),
-    soft('Appels des contacts', byContacts<RawCall>(`select ${callFields} from Calls where Who_Id in (${contactIdList}) and Call_Start_Time >= '${sinceCoql}' order by Call_Start_Time desc limit 2000`)),
     soft('Rencontres', coql<RawEvent>(`select ${eventFields} from Events where What_Id = ${accountLit} and Start_DateTime >= '${sinceCoql}' order by Start_DateTime desc limit 2000`)),
     soft('Rencontres des contacts', byContacts<RawEvent>(`select ${eventFields} from Events where Who_Id in (${contactIdList}) and Start_DateTime >= '${sinceCoql}' order by Start_DateTime desc limit 2000`)),
   ]);
@@ -570,7 +546,7 @@ export async function gatherDossier(accountId: string, db: Db): Promise<Dossier>
       `where Parent_Id in (${coqlIds(ids)}) and Created_Time >= '${sinceCoql}' order by Created_Time desc limit 2000`,
     )));
 
-  const [users, noteBatches, [callsA, callsC, eventsA, eventsC], emailPart, quotes, overdue] =
+  const [users, noteBatches, [eventsA, eventsC], emailPart, quotes, overdue] =
     await Promise.all([usersP, notesP, activityP, emailsP, quotesP, overdueP]);
   const person = (l: Lookup | null | undefined) => (l?.id ? users.names.get(l.id) || l.name || null : null);
   const who = (l: Lookup | null | undefined) => (l?.id ? contactName.get(l.id) ?? l.name ?? null : null);
@@ -610,18 +586,6 @@ export async function gatherDossier(accountId: string, db: Db): Promise<Dossier>
     .filter((n) => n.text || n.title)
     .sort((a, b) => Date.parse(b.created) - Date.parse(a.created));
 
-  const callById = new Map<string, RawCall>();
-  for (const c of [...callsA, ...callsC]) callById.set(c.id, c);
-  const calls: CallItem[] = [...callById.values()].map((c): CallItem => ({
-    id: c.id,
-    type: /manqu|miss/i.test(c.Call_Type ?? '') ? 'missed' : /entrant|inbound/i.test(c.Call_Type ?? '') ? 'in' : 'out',
-    start: c.Call_Start_Time,
-    durationSec: Number(c.Call_Duration_in_seconds) || 0,
-    owner: person(c.Owner),
-    contactName: who(c.Who_Id),
-    recorded: !!c.Voice_Recording__s,
-  })).sort((a, b) => Date.parse(b.start) - Date.parse(a.start));
-
   const eventById = new Map<string, RawEvent>();
   for (const e of [...eventsA, ...eventsC]) eventById.set(e.id, e);
   const meetings: MeetingItem[] = [...eventById.values()].map((e) => ({
@@ -653,7 +617,6 @@ export async function gatherDossier(accountId: string, db: Db): Promise<Dossier>
     emailCounts: emailPart.emailCounts,
     notes,
     tasks,
-    calls,
     meetings,
     quotes,
     overdue,

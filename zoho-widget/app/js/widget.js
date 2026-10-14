@@ -27,11 +27,11 @@
   };
   var KIND = {
     account: 'fiche', contact: 'contact', email: 'courriel', note: 'note', task: 'tâche',
-    call: 'appel', meeting: 'rencontre', quote: 'devis', invoice: 'facture',
+    meeting: 'rencontre', quote: 'devis', invoice: 'facture',
   };
   var KIND_ICON = {
     account: 'building', contact: 'user', email: 'mail', note: 'note', task: 'task',
-    call: 'phone', meeting: 'calendar', quote: 'quote', invoice: 'dollar',
+    meeting: 'calendar', quote: 'quote', invoice: 'dollar',
   };
 
   var state = {
@@ -109,7 +109,6 @@
     info: svg('<circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/>'),
     clock: svg('<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>'),
     mail: svg('<rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3.5 7l8.5 6 8.5-6"/>'),
-    phone: svg('<path d="M5 4h3.5l2 5-2.4 1.5a11 11 0 0 0 5.4 5.4L15 13.5l5 2V19a2 2 0 0 1-2 2A16 16 0 0 1 3 6a2 2 0 0 1 2-2z"/>'),
     note: svg('<path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6M8 13h8M8 17h5"/>'),
     task: svg('<rect x="3" y="3" width="18" height="18" rx="3"/><path d="M8 12l3 3 5-6"/>'),
     quote: svg('<rect x="5" y="4" width="14" height="17" rx="2"/><path d="M9 4V3h6v1M9 10h6M9 14h6M9 18h3"/>'),
@@ -339,7 +338,7 @@
 
   /** One figure. A zero is drawn faint so the figures that matter stand out. */
   function kpi(o) {
-    return h('div', { class: 'kpi k-' + o.kind + (o.deal ? ' is-deal' : '') + (o.zero ? ' is-zero' : '') + (o.alert ? ' is-alert' : '') }, [
+    return h('div', { class: 'kpi k-' + o.kind + (o.zero ? ' is-zero' : '') + (o.alert ? ' is-alert' : '') }, [
       h('div', { class: 'kpi-icon', 'aria-hidden': 'true' }, icon(o.icon)),
       h('div', { class: 'kpi-text' }, [
         h('div', { class: 'kpi-label', text: o.label, title: o.label }),
@@ -355,7 +354,7 @@
 
   function kpis(s) {
     var last = s.last_touch;
-    var who = last && (last.kind === 'email' || last.kind === 'call') ? (last.direction === 'in' ? ' du client' : ' par Affichez') : '';
+    var who = last && last.kind === 'email' ? (last.direction === 'in' ? ' du client' : ' par Affichez') : '';
     return h('div', { class: 'kpis' }, [
       kpi({
         label: 'Dernière activité', icon: 'clock', kind: 'slate', zero: !last,
@@ -363,24 +362,19 @@
         sub: last ? capitalize(KIND[last.kind] || '') + who : '18 derniers mois',
       }),
       kpi({ label: 'Courriels', icon: 'mail', kind: 'indigo', zero: !s.emails, value: String(s.emails), sub: '12 mois' }),
-      kpi({
-        label: 'Appels', icon: 'phone', kind: 'teal', zero: !s.calls && !s.missed_calls,
-        value: String(s.calls), sub: s.calls ? s.call_minutes + ' min' : '12 mois',
-        alertSub: s.missed_calls ? plural(s.missed_calls, 'manqué', 'manqués') : null,
-      }),
       kpi({ label: 'Notes', icon: 'note', kind: 'violet', zero: !s.notes, value: String(s.notes), sub: '12 mois' }),
       kpi({
-        label: 'Facturé 12 mois', icon: 'dollar', kind: 'green', deal: true, zero: !s.invoiced_12m, alert: !!s.overdue.count,
+        label: 'Facturé 12 mois', icon: 'dollar', kind: 'green', zero: !s.invoiced_12m, alert: !!s.overdue.count,
         value: money.format(s.invoiced_12m),
         sub: s.overdue.count ? null : 'avant taxes',
         alertSub: s.overdue.count ? plural(s.overdue.count, 'facture', 'factures') + ' en retard' : null,
       }),
       kpi({
-        label: 'Devis ouverts', icon: 'quote', kind: 'blue', deal: true, zero: !s.open_quotes.count,
+        label: 'Devis ouverts', icon: 'quote', kind: 'blue', zero: !s.open_quotes.count,
         value: String(s.open_quotes.count),
         sub: s.open_quotes.count ? money.format(s.open_quotes.total) : null,
       }),
-      kpi({ label: 'Tâches ouvertes', icon: 'task', kind: 'amber', deal: true, zero: !s.open_tasks, value: String(s.open_tasks) }),
+      kpi({ label: 'Tâches ouvertes', icon: 'task', kind: 'amber', zero: !s.open_tasks, value: String(s.open_tasks) }),
     ]);
   }
 
@@ -403,7 +397,6 @@
     var parts = [];
     if (b.emails) parts.push(plural(b.emails, 'courriel', 'courriels'));
     if (b.notes) parts.push(plural(b.notes, 'note', 'notes'));
-    if (b.calls) parts.push(plural(b.calls, 'appel', 'appels'));
     if (b.meetings) parts.push(plural(b.meetings, 'rencontre', 'rencontres'));
     if (b.tasks) parts.push(plural(b.tasks, 'tâche', 'tâches'));
     if (b.quotes) parts.push(plural(b.quotes, 'devis', 'devis'));
@@ -417,7 +410,7 @@
     var secs = running && running.created_at ? Math.max(0, Math.round((Date.now() - Date.parse(running.created_at)) / 1000)) : 0;
     return h('div', { class: 'running', role: 'status' }, [
       h('span', { class: 'spinner', 'aria-hidden': 'true' }),
-      h('span', { text: 'Lecture des courriels, notes, appels, devis et factures, puis rédaction du résumé… ' + (secs ? secs + ' s' : '') }),
+      h('span', { text: 'Lecture des courriels, notes, devis et factures, puis rédaction du résumé… ' + (secs ? secs + ' s' : '') }),
     ]);
   }
 
@@ -512,7 +505,7 @@
     ]);
   }
 
-  var READS = [['email', 'Courriels'], ['note', 'Notes'], ['call', 'Appels'], ['meeting', 'Rencontres'], ['task', 'Tâches'], ['quote', 'Devis'], ['invoice', 'Factures']];
+  var READS = [['email', 'Courriels'], ['note', 'Notes'], ['meeting', 'Rencontres'], ['task', 'Tâches'], ['quote', 'Devis'], ['invoice', 'Factures']];
 
   function renderEmpty(running, failed) {
     var message = failed ? 'La dernière génération a échoué : ' + (failed.error || 'erreur inconnue') : state.error;

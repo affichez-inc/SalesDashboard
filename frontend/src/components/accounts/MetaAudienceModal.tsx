@@ -9,13 +9,25 @@ import { fetchAccountContacts } from './accountContacts';
 
 const FN_URL = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/meta-custom-audience`;
 
-type MetaStatus = {
-    configured: boolean;
-    ad_account: { id: string; name: string | null } | null;
-    has_permission: boolean | null;
-    /** Blocks sending. */
+type AdAccountOption = {
+    id: string;
+    name: string | null;
+    /** Why the account cannot be chosen; null when it can. */
     problem: string | null;
 };
+
+type MetaStatus = {
+    configured: boolean;
+    /** The default account. */
+    ad_account: { id: string; name: string | null } | null;
+    /** Every account on offer, the default first. Absent from a function deployed before the choice. */
+    ad_accounts?: AdAccountOption[];
+    has_permission: boolean | null;
+    /** Blocks sending, whatever the account. */
+    problem: string | null;
+};
+
+const accountLabel = (a: { id: string; name: string | null }) => a.name ?? a.id;
 
 type CreateResult = {
     /** False when the audience exists but its record in the app could not be completed. */
@@ -62,7 +74,8 @@ type Phase = 'loading' | 'ready' | 'sending' | 'done';
 
 /**
  * "Créer une audience Meta" for the accounts currently filtered on Comptes ·
- * Détail: a name and a summary of who will be sent before anything leaves.
+ * Détail: the ad account (when several are offered), a name and a summary of
+ * who will be sent before anything leaves.
  * Every contact with an email or a phone is sent, marketing refusals included.
  *
  * The browser sends only the account ids. The function reads the contacts
@@ -81,6 +94,7 @@ export function MetaAudienceModal({ loadAccounts, filters, defaultName, onClose 
     const [status, setStatus] = useState<MetaStatus | null>(null);
     const [accounts, setAccounts] = useState<ZohoAccountRow[]>([]);
     const [contacts, setContacts] = useState<AccountContactExportRow[]>([]);
+    const [adAccountId, setAdAccountId] = useState<string | null>(null);
     const [name, setName] = useState(defaultName);
     const [description, setDescription] = useState('');
     // Two kinds of error: a failed load leaves nothing to send, a failed send
@@ -101,6 +115,7 @@ export function MetaAudienceModal({ loadAccounts, filters, defaultName, onClose 
                 const cts = await fetchAccountContacts(accts.map(a => a.zoho_account_id));
                 if (cancelled) return;
                 setStatus(st);
+                setAdAccountId((st.ad_accounts?.find(a => a.problem === null) ?? st.ad_account)?.id ?? null);
                 setAccounts(accts);
                 setContacts(cts);
                 setPhase('ready');
@@ -133,7 +148,16 @@ export function MetaAudienceModal({ loadAccounts, filters, defaultName, onClose 
         };
     }, [contacts]);
 
-    const ready = status !== null && status.problem === null;
+    const adAccounts = useMemo<AdAccountOption[]>(
+        () => status?.ad_accounts ?? (status?.ad_account ? [{ ...status.ad_account, problem: null }] : []),
+        [status],
+    );
+    const adAccount = adAccounts.find(a => a.id === adAccountId) ?? null;
+    // With several accounts each one says why it is unavailable; a single one
+    // has nowhere else to say it.
+    const blocking = status?.problem ?? (adAccounts.length === 1 ? adAccounts[0].problem : null);
+
+    const ready = status !== null && blocking === null && adAccount !== null && adAccount.problem === null;
     const canSend = phase === 'ready' && ready && name.trim() !== '' && summary.toSend > 0 && !loadError;
 
     const send = async () => {
@@ -148,6 +172,7 @@ export function MetaAudienceModal({ loadAccounts, filters, defaultName, onClose 
                 account_ids: accounts.map(a => a.zoho_account_id),
                 exclude_opted_out: false,
                 filters,
+                ad_account_id: adAccount?.id,
             });
             setResult(r);
             setPhase('done');
@@ -203,8 +228,8 @@ export function MetaAudienceModal({ loadAccounts, filters, defaultName, onClose 
                         <div className="min-w-0">
                             <h2 className="text-lg font-semibold text-ink">Créer une audience Meta</h2>
                             <p className="text-xs text-ink-mute truncate">
-                                {status?.ad_account
-                                    ? `Compte publicitaire ${status.ad_account.name ?? status.ad_account.id}`
+                                {adAccounts.length === 1
+                                    ? `Compte publicitaire ${accountLabel(adAccounts[0])}`
                                     : 'Audience personnalisée à partir d’une liste de clients'}
                             </p>
                         </div>
@@ -232,7 +257,11 @@ export function MetaAudienceModal({ loadAccounts, filters, defaultName, onClose 
                             <div className="flex items-start gap-3 rounded-lg bg-tone-good-soft px-4 py-3">
                                 <CheckCircle2 className="h-5 w-5 shrink-0 text-tone-good-ink mt-0.5" />
                                 <div className="text-sm text-tone-good-ink">
-                                    <p className="font-semibold">Audience « {result.name} » créée.</p>
+                                    <p className="font-semibold">
+                                        Audience « {result.name} » créée dans le compte publicitaire{' '}
+                                        {accountLabel(adAccounts.find(a => a.id === result.ad_account_id)
+                                            ?? { id: result.ad_account_id, name: null })}.
+                                    </p>
                                     <p className="mt-0.5 text-xs">
                                         Meta la remplit en arrière-plan : la taille estimée apparaît dans le
                                         Gestionnaire de publicités, en général en moins d’une heure (jusqu’à 24 h).
@@ -276,12 +305,12 @@ export function MetaAudienceModal({ loadAccounts, filters, defaultName, onClose 
 
                     {(phase === 'ready' || phase === 'sending') && (
                         <>
-                            {status?.problem && (
+                            {blocking && (
                                 <div className="flex items-start gap-3 rounded-lg bg-tone-warn-soft px-4 py-3 text-sm text-tone-warn-ink">
                                     <AlertTriangle className="h-5 w-5 shrink-0 mt-0.5" />
                                     <div className="space-y-1">
                                         <p className="font-semibold">Meta n’est pas prêt pour les audiences.</p>
-                                        <p className="text-xs">{status.problem}</p>
+                                        <p className="text-xs">{blocking}</p>
                                     </div>
                                 </div>
                             )}
@@ -295,6 +324,43 @@ export function MetaAudienceModal({ loadAccounts, filters, defaultName, onClose 
                                         <Stat label="Avec téléphone" value={summary.withPhone} />
                                     </dl>
                                 </div>
+                            )}
+
+                            {adAccounts.length > 1 && (
+                                <fieldset disabled={phase === 'sending'}>
+                                    <legend className="block text-sm font-semibold text-ink mb-1">Compte publicitaire</legend>
+                                    <div className="space-y-2">
+                                        {adAccounts.map(a => (
+                                            <label
+                                                key={a.id}
+                                                className={cn(
+                                                    'flex items-start gap-3 rounded-md border px-3 py-2',
+                                                    adAccountId === a.id ? 'border-ink' : 'border-hairline-strong',
+                                                    a.problem ? 'cursor-not-allowed' : 'cursor-pointer hover:border-ink/40',
+                                                )}
+                                            >
+                                                <input
+                                                    type="radio"
+                                                    name="meta-ad-account"
+                                                    value={a.id}
+                                                    checked={adAccountId === a.id}
+                                                    disabled={a.problem !== null}
+                                                    onChange={() => { setAdAccountId(a.id); setSendError(null); }}
+                                                    className="mt-0.5 h-4 w-4 accent-ink"
+                                                />
+                                                <span className="min-w-0 text-sm">
+                                                    <span className={cn('font-semibold', a.problem ? 'text-ink-mute' : 'text-ink')}>
+                                                        {accountLabel(a)}
+                                                    </span>
+                                                    <span className="ml-1.5 text-xs text-ink-mute tabular-nums" translate="no">{a.id}</span>
+                                                    {a.problem && (
+                                                        <span className="block text-xs text-tone-warn-ink mt-0.5">{a.problem}</span>
+                                                    )}
+                                                </span>
+                                            </label>
+                                        ))}
+                                    </div>
+                                </fieldset>
                             )}
 
                             <label className="block">

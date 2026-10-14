@@ -3,9 +3,12 @@
 // filtered on Comptes · Détail.
 //
 //   POST { action: "status" }
-//     → whether the Meta side is ready: token, permission, ad account, terms.
-//   POST { action: "create", name, description?, account_ids, exclude_opted_out }
-//     → creates the audience on the ad account and uploads the contacts.
+//     → whether the Meta side is ready: token, permission, and per ad account
+//       whether the system user may create audiences on it.
+//   POST { action: "create", name, description?, account_ids, exclude_opted_out,
+//          ad_account_id? }
+//     → creates the audience on that ad account (default: the first one) and
+//       uploads the contacts.
 //
 // Who may call it: a signed-in user with both the Comptes and the Publicité
 // sections (an admin has both), asked of the database with the caller's own
@@ -25,8 +28,8 @@
 // Secrets:
 //   META_AUDIENCE_ACCESS_TOKEN   system-user token with ads_management;
 //                                falls back to META_ACCESS_TOKEN
-//   META_AUDIENCE_AD_ACCOUNT_ID  the ad account the audiences are created on;
-//                                falls back to the first of META_AD_ACCOUNT_ID
+//   META_AUDIENCE_AD_ACCOUNT_ID  the ad accounts offered, comma-separated, the
+//                                default first; falls back to META_AD_ACCOUNT_ID
 //   META_GRAPH_VERSION           default v25.0
 
 import { contactRows, sha256Hex, SCHEMA, type ContactInput } from './normalize.ts';
@@ -38,10 +41,13 @@ const API_KEY = Deno.env.get('SUPABASE_ANON_KEY') ?? SERVICE_KEY;
 
 const GRAPH_VERSION = Deno.env.get('META_GRAPH_VERSION') ?? 'v25.0';
 const META_TOKEN = Deno.env.get('META_AUDIENCE_ACCESS_TOKEN') ?? Deno.env.get('META_ACCESS_TOKEN') ?? '';
-const AD_ACCOUNT_ID = (
-  Deno.env.get('META_AUDIENCE_AD_ACCOUNT_ID')
-  ?? (Deno.env.get('META_AD_ACCOUNT_ID') ?? '').split(',')[0]
-).trim().replace(/^act_/, '');
+/** The ad accounts an audience may be created on; the first is the default. */
+const AD_ACCOUNT_IDS = [...new Set(
+  (Deno.env.get('META_AUDIENCE_AD_ACCOUNT_ID') ?? Deno.env.get('META_AD_ACCOUNT_ID') ?? '')
+    .split(',')
+    .map(s => s.trim().replace(/^act_/, ''))
+    .filter(s => /^\d+$/.test(s)),
+)];
 
 /** Meta accepts up to 10,000 rows a request; half that keeps a request near 3 MB. */
 const UPLOAD_BATCH = 5_000;
@@ -188,63 +194,84 @@ function explain(e: unknown): string {
   return `Meta : ${e.message}`.slice(0, 300);
 }
 
+type AdAccountStatus = {
+  id: string;
+  name: string | null;
+  /** Reported, never a block: see adAccountStatus. */
+  terms_accepted: boolean | null;
+  /** Why this account cannot be chosen; null when it can. */
+  problem: string | null;
+};
+
 type Status = {
   configured: boolean;
+  /** The default account. Page builds from before the choice of account read this one. */
   ad_account: { id: string; name: string | null } | null;
+  ad_accounts: AdAccountStatus[];
   has_permission: boolean | null;
-  terms_accepted: boolean | null;
-  terms_url: string | null;
-  /** Blocks sending. */
+  /** Blocks sending, whatever the account. */
   problem: string | null;
-  /** Shown, does not block. */
-  warning: string | null;
 };
+
+/** The system user's tasks on an ad account that let it create an audience there. */
+const AUDIENCE_TASKS = new Set(['MANAGE', 'ADVERTISE']);
+
+/**
+ * `user_tasks` is the system user's own role on the account. Meta leaves the
+ * field out when it has none: the account stays readable through the business
+ * (spend, audience list), but creating an audience needs a role on it.
+ *
+ * The terms flag is reported only. If it read differently for the system user
+ * than for the person who accepted, a block would lock the account for good,
+ * whereas Meta refusing the create says the same thing (1870034).
+ */
+async function adAccountStatus(id: string): Promise<AdAccountStatus> {
+  try {
+    const acct = await meta('GET', `act_${id}`, { fields: 'name,tos_accepted,user_tasks' });
+    const tos = (acct.tos_accepted ?? {}) as Record<string, number>;
+    const tasks = (acct.user_tasks ?? []) as string[];
+    return {
+      id,
+      name: (acct.name as string) ?? null,
+      terms_accepted: tos.custom_audience_tos === 1,
+      problem: tasks.some(t => AUDIENCE_TASKS.has(t))
+        ? null
+        : "L'application n'a pas encore accès à ce compte publicitaire : un administrateur doit donner "
+          + "le contrôle total du compte à l'utilisateur système dans les paramètres de l'entreprise Meta.",
+    };
+  } catch (e) {
+    return { id, name: null, terms_accepted: null, problem: explain(e) };
+  }
+}
 
 async function metaStatus(): Promise<Status> {
   const base: Status = {
-    configured: Boolean(META_TOKEN && AD_ACCOUNT_ID),
-    ad_account: AD_ACCOUNT_ID ? { id: AD_ACCOUNT_ID, name: null } : null,
+    configured: Boolean(META_TOKEN && AD_ACCOUNT_IDS.length > 0),
+    ad_account: null,
+    ad_accounts: [],
     has_permission: null,
-    terms_accepted: null,
-    terms_url: AD_ACCOUNT_ID
-      ? `https://business.facebook.com/ads/manage/customaudiences/tos/?act=${AD_ACCOUNT_ID}`
-      : null,
     problem: null,
-    warning: null,
   };
   if (!base.configured) {
     return { ...base, problem: "La connexion Meta n'est pas configurée (jeton ou compte publicitaire manquant)." };
   }
+  const [perms, accounts] = await Promise.all([
+    meta('GET', 'me/permissions').catch(() => null),
+    Promise.all(AD_ACCOUNT_IDS.map(adAccountStatus)),
+  ]);
+  base.ad_accounts = accounts;
+  base.ad_account = { id: accounts[0].id, name: accounts[0].name };
+
   // The permission list is a convenience, not a gate. Meta documents it for
   // user tokens; if it fails or comes back empty for this System User token,
   // the answer is "unknown" and the create call itself will say what is wrong.
-  try {
-    const perms = await meta('GET', 'me/permissions');
-    const list = (perms.data ?? []) as Array<{ permission: string; status: string }>;
-    if (list.length > 0) {
-      base.has_permission = list.some(p => p.permission === 'ads_management' && p.status === 'granted');
-    }
-  } catch { /* unknown */ }
-
-  try {
-    const acct = await meta('GET', `act_${AD_ACCOUNT_ID}`, { fields: 'name,tos_accepted' });
-    base.ad_account = { id: AD_ACCOUNT_ID, name: (acct.name as string) ?? null };
-    const tos = (acct.tos_accepted ?? {}) as Record<string, number>;
-    base.terms_accepted = tos.custom_audience_tos === 1;
-  } catch (e) {
-    base.problem = explain(e);
-    return base;
+  // An explicit list without ads_management is definitive: block.
+  const list = (perms?.data ?? []) as Array<{ permission: string; status: string }>;
+  if (list.length > 0) {
+    base.has_permission = list.some(p => p.permission === 'ads_management' && p.status === 'granted');
   }
-
-  // An explicit permission list without ads_management is definitive: block.
-  // The terms flag is a warning only - if it reads differently for a System
-  // User than for the person who accepted, a block would lock the feature for
-  // good, whereas Meta refusing the create says the same thing (1870034).
   if (base.has_permission === false) {
     base.problem = "Le jeton Meta n'a pas la permission ads_management : il ne peut que lire les statistiques.";
-  } else if (!base.terms_accepted) {
-    base.warning = "Meta n'indique pas que les conditions des audiences personnalisées sont acceptées pour ce compte publicitaire. "
-      + 'Si la création échoue, faites-les accepter par un administrateur du compte.';
   }
   return base;
 }
@@ -361,6 +388,8 @@ type CreateBody = {
   account_ids?: unknown;
   exclude_opted_out?: unknown;
   filters?: unknown;
+  /** One of AD_ACCOUNT_IDS; the first when absent. */
+  ad_account_id?: unknown;
 };
 
 /**
@@ -399,8 +428,15 @@ async function create(caller: Caller, body: CreateBody): Promise<Response> {
   if (accountIds.length > MAX_ACCOUNTS) {
     return json({ error: `Trop de comptes (${accountIds.length}) : ${MAX_ACCOUNTS} au plus.` }, 400);
   }
-  if (!META_TOKEN || !AD_ACCOUNT_ID) {
+  if (!META_TOKEN || AD_ACCOUNT_IDS.length === 0) {
     return json({ error: "La connexion Meta n'est pas configurée." }, 503);
+  }
+  // Only an account on offer: the id comes from the browser.
+  const adAccount = body.ad_account_id === undefined || body.ad_account_id === null
+    ? AD_ACCOUNT_IDS[0]
+    : String(body.ad_account_id).trim().replace(/^act_/, '');
+  if (!AD_ACCOUNT_IDS.includes(adAccount)) {
+    return json({ error: "Ce compte publicitaire n'est pas proposé pour les audiences." }, 400);
   }
 
   const contacts = await readContacts(caller.auth, accountIds);
@@ -428,7 +464,7 @@ async function create(caller: Caller, body: CreateBody): Promise<Response> {
 
   const logBase = {
     created_by: caller.email || 'inconnu',
-    ad_account_id: AD_ACCOUNT_ID,
+    ad_account_id: adAccount,
     audience_name: name,
     description: description || null,
     filters,
@@ -478,7 +514,7 @@ async function create(caller: Caller, body: CreateBody): Promise<Response> {
   let invalid = 0;
   let rowsSent = 0;
   try {
-    const created = await meta('POST', `act_${AD_ACCOUNT_ID}/customaudiences`, {
+    const created = await meta('POST', `act_${adAccount}/customaudiences`, {
       name,
       subtype: 'CUSTOM',
       description: description || 'Créée depuis Comptes · Détail (application Ventes Affichez)',
@@ -548,8 +584,8 @@ async function create(caller: Caller, body: CreateBody): Promise<Response> {
     customer_file_source: customerFileSource,
     audience_id: audienceId,
     name,
-    ad_account_id: AD_ACCOUNT_ID,
-    audience_url: `https://adsmanager.facebook.com/adsmanager/audiences?act=${AD_ACCOUNT_ID}&ids=${audienceId}`,
+    ad_account_id: adAccount,
+    audience_url: `https://adsmanager.facebook.com/adsmanager/audiences?act=${adAccount}&ids=${audienceId}`,
     accounts: accountIds.length,
     contacts: contacts.length,
     contacts_sent: sentIds.length,

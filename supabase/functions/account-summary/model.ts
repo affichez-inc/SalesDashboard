@@ -34,6 +34,7 @@ export const SummarySchema = z.object({
     contact_name: z.string().nullable().describe('Nom exact d\'un contact [P…], ou null.'),
     due_in_days: z.number().describe("Délai en jours à partir d'aujourd'hui."),
   })).describe('0 à 3 actions.'),
+  temperature_sources: z.array(z.string()).describe('Identifiants qui prouvent une température plus haute que la base ; vide sinon.'),
   temperature_reason: z.string().describe('Une phrase qui nomme le fait décisif.'),
   temperature: z.enum(['a_risque', 'chaud', 'client_actif', 'tiede', 'dormant', 'froid']),
 });
@@ -49,7 +50,7 @@ export interface ModelResult {
 
 export async function summarize(system: string, user: string): Promise<ModelResult> {
   // Well inside the edge function's wall clock; a hung call fails the row instead.
-  const client = new Anthropic({ apiKey: Deno.env.get('ANTHROPIC_API_KEY'), timeout: 100_000, maxRetries: 1 });
+  const client = new Anthropic({ apiKey: Deno.env.get('ANTHROPIC_API_KEY'), timeout: 100_000, maxRetries: 2 });
   const fallback = FALLBACK_MODELS.test(MODEL)
     ? { betas: ['server-side-fallback-2026-07-01'], fallbacks: 'default' as const }
     : {};

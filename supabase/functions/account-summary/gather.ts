@@ -11,11 +11,11 @@ import { booksGet, BOOKS_ORG_IDS, chunk, coql, coqlIds, crmGet, mapLimit, ZohoEr
 
 export const WINDOW_MONTHS = 18;
 
-const MAX_CONTACTS = 40;
+const MAX_CONTACTS = 60;          // the largest account holds 25
 const MAX_EMAIL_PAGES = 4;       // 100 emails a page, newest first; the cursor is opaque
-const MAX_EMAIL_BODIES = 40;
-const EMAIL_CHARS = 2_500;
-const NOTE_CHARS = 2_000;
+const MAX_EMAIL_BODIES = 60;
+const EMAIL_CHARS = 3_000;
+const NOTE_CHARS = 4_000;        // reps paste whole email threads into notes
 const ZOHO_CONCURRENCY = 4;
 
 /** Books totals include GST+QST; the syncs store amounts before tax, and so does this. */
@@ -68,8 +68,6 @@ export interface EmailItem {
   subject: string;
   owner: string | null;
   text: string | null;
-  intent: string | null;
-  sentiment: string | null;
 }
 
 export interface NoteItem {
@@ -191,8 +189,6 @@ interface RawEmail {
   from?: { email?: string | null; user_name?: string | null } | null;
   to?: Array<{ email?: string | null; user_name?: string | null }> | null;
   owner?: { id: string; name?: string | null } | null;
-  intent?: string | null;
-  sentiment_info?: string | null;
 }
 
 interface EmailListResponse {
@@ -245,6 +241,8 @@ interface RawEvent {
 interface RawOverdueInvoice {
   invoice_id: string;
   invoice_number: string;
+  customer_id?: string;
+  status?: string;
   date: string;
   due_date?: string | null;
   balance: number;
@@ -368,47 +366,60 @@ async function gatherEmails(contacts: Contact[], since: number, warnings: string
     subject: oneLine(k.raw.subject),
     owner: k.raw.owner?.name ?? null,
     text: i < texts.length ? texts[i] : null,
-    intent: k.raw.intent ?? null,
-    sentiment: typeof k.raw.sentiment_info === 'string' ? k.raw.sentiment_info : null,
   }));
   return { emails, emailCounts: { listed, bulk: bulkIds.size } };
 }
 
 /** Overdue invoices with their balance due, live: the mirror never sees a void. */
+/** One CRM account is one Books customer per office, two at most; more means a filter was dropped. */
+const MAX_CUSTOMERS_PER_ACCOUNT = 3;
+
+/**
+ * Overdue invoices from two lookups merged on the invoice id: by the CRM account
+ * id with `status=overdue`, and by each linked Books customer with
+ * `filter_by=Status.OverDue`. Never `zcrm_account_id` with `filter_by`: Books
+ * then drops the account filter and returns the whole org's overdue list.
+ */
 async function gatherOverdue(
+  accountId: string,
   links: Array<{ books_customer_id: string; office: string }>,
   warnings: string[],
 ): Promise<{ live: boolean; items: OverdueInvoice[] }> {
-  const items: OverdueInvoice[] = [];
+  const byId = new Map<string, OverdueInvoice>();
   let live = true;
-  await mapLimit(links, 2, async (link) => {
-    const orgId = BOOKS_ORG_IDS[link.office];
+  const lookups: Array<{ office: string; query: Record<string, string>; byAccount: boolean }> = [
+    ...Object.keys(BOOKS_ORG_IDS).map((office) => ({ office, query: { zcrm_account_id: accountId, status: 'overdue' }, byAccount: true })),
+    ...links.map((l) => ({ office: l.office, query: { customer_id: l.books_customer_id, filter_by: 'Status.OverDue' }, byAccount: false })),
+  ];
+  await mapLimit(lookups, 2, async (lookup) => {
+    const orgId = BOOKS_ORG_IDS[lookup.office];
     if (!orgId) return;
     try {
-      const res = await booksGet<{ invoices?: RawOverdueInvoice[] }>('invoices', orgId, {
-        customer_id: link.books_customer_id, filter_by: 'Status.OverDue', per_page: '100',
-      });
-      for (const i of res?.invoices ?? []) {
-        items.push({
+      const res = await booksGet<{ invoices?: RawOverdueInvoice[] }>('invoices', orgId, { ...lookup.query, per_page: '200' });
+      const list = (res?.invoices ?? []).filter((i) => !i.status || i.status === 'overdue');
+      if (lookup.byAccount && new Set(list.map((i) => i.customer_id)).size > MAX_CUSTOMERS_PER_ACCOUNT) {
+        warnings.push(`Factures en retard ${lookup.office} par compte ignorées (filtre non appliqué par Books).`);
+        return;
+      }
+      for (const i of list) {
+        if (byId.has(i.invoice_id)) continue;
+        byId.set(i.invoice_id, {
           id: i.invoice_id,
           number: i.invoice_number,
           date: i.date,
           dueDate: i.due_date || null,
           balance: Math.round(((Number(i.balance) || 0) / QC_TAX_FACTOR) * 100) / 100,
           balanceTaxIncl: Number(i.balance) || 0,
-          office: link.office,
+          office: lookup.office,
         });
       }
     } catch (err) {
       live = false;
-      warnings.push(`Factures en retard ${link.office} non vérifiées dans Books (${err instanceof Error ? err.message : err}).`);
+      warnings.push(`Factures en retard ${lookup.office} non vérifiées dans Books (${err instanceof Error ? err.message : err}).`);
     }
   });
-  return { live, items: items.sort((a, b) => a.date.localeCompare(b.date)) };
+  return { live, items: [...byId.values()].sort((a, b) => a.date.localeCompare(b.date)) };
 }
-
-/** One CRM account is one Books customer per office, two at most; more means a filter was dropped. */
-const MAX_CUSTOMERS_PER_ACCOUNT = 3;
 
 /**
  * Quotes of every status, from two lookups merged on the estimate id: by the
@@ -542,7 +553,7 @@ export async function gatherDossier(accountId: string, db: Db): Promise<Dossier>
   ]);
   const emailsP = gatherEmails(contacts, since, warnings);
   const quotesP = gatherQuotes(accountId, booksLinks, sinceDate.toISOString().slice(0, 10), warnings);
-  const overdueP = gatherOverdue(booksLinks, warnings);
+  const overdueP = gatherOverdue(accountId, booksLinks, warnings);
 
   const [taskOnAccount, taskOnContacts] = await tasksP;
   const taskById = new Map<string, RawTask>();

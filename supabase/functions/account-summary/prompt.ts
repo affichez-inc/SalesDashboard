@@ -40,7 +40,16 @@ export interface Basis {
   invoices: number;
 }
 
+export type Temperature = 'a_risque' | 'chaud' | 'client_actif' | 'tiede' | 'dormant' | 'froid';
+
+/** The temperature the figures alone give, and why. The model may only raise it, with cited evidence. */
+export interface BaseTemperature {
+  temperature: Temperature;
+  reason: string;
+}
+
 export interface BuiltPrompt {
+  base: BaseTemperature;
   text: string;
   sources: Record<string, SourceRef>;
   contacts: Array<{ id: string; name: string }>;
@@ -48,8 +57,8 @@ export interface BuiltPrompt {
   basis: Basis;
 }
 
-const MAX_TIMELINE = 300;
-const MAX_INVOICE_LINES = 30;
+const MAX_TIMELINE = 400;
+const MAX_INVOICE_LINES = 150;   // the busiest account has 81 invoices in a year
 const STATS_DAYS = 365;
 const WAITING_MAX_DAYS = 120;
 /** An outgoing call shorter than this is an attempt: voicemail or no answer. */
@@ -58,6 +67,8 @@ const DAY_MS = 86_400_000;
 
 const money = new Intl.NumberFormat('fr-CA', { style: 'currency', currency: 'CAD', maximumFractionDigits: 0 });
 const localDay = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Toronto', year: 'numeric', month: '2-digit', day: '2-digit' });
+const shortDay = new Intl.DateTimeFormat('fr-CA', { timeZone: 'UTC', day: 'numeric', month: 'short' });
+const shortDayYear = new Intl.DateTimeFormat('fr-CA', { timeZone: 'UTC', day: 'numeric', month: 'short', year: 'numeric' });
 const longDay = new Intl.DateTimeFormat('fr-CA', { timeZone: 'America/Toronto', weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
 
 /** YYYY-MM-DD on Montreal's calendar. Plain dates pass through. */
@@ -86,6 +97,15 @@ function age(date: string | null | undefined, today: string): string {
   if (n === -1) return '(demain)';
   if (n > 365) return `(il y a ${count(Math.floor(n / 365), 'an', 'ans')})`;
   return n > 0 ? `(il y a ${n} j)` : `(dans ${-n} j)`;
+}
+
+/** "9 oct." this year, "9 oct. 2025" otherwise: the card's own date style. */
+function short(date: string | null | undefined, today: string): string {
+  const d = day(date);
+  if (!d) return '';
+  const t = Date.parse(`${d}T12:00:00Z`);
+  const text = d.slice(0, 4) === today.slice(0, 4) ? shortDay.format(t) : shortDayYear.format(t);
+  return d.endsWith('-01') ? text.replace(/^1 /, '1er ') : text;
 }
 
 function dated(date: string | null | undefined, today: string): string {
@@ -125,7 +145,9 @@ function count(n: number, one: string, many: string): string {
  * reaching out (inbound email, missed call, web form); `closesWait` is anything
  * that answers it (a rep's email, call, meeting or logged note, or a client call
  * someone picked up). `contact` is true for real contact between the two sides,
- * as opposed to a note logged in the CRM.
+ * as opposed to a note logged in the CRM. `conversation` is a real two-way
+ * exchange: the client wrote, a call connected (theirs, or ours past the
+ * attempt threshold), or a meeting took place.
  */
 interface Touch {
   at: number;
@@ -135,6 +157,7 @@ interface Touch {
   opensWait: boolean;
   closesWait: boolean;
   contact: boolean;
+  conversation: boolean;
   label: string;
 }
 
@@ -145,7 +168,7 @@ function buildTouches(d: Dossier, nowMs: number): Touch[] {
       const who = e.contactIds.map((c) => contactName.get(c)).filter(Boolean).join(', ');
       return {
         at: Date.parse(e.time), kind: 'email', direction: e.direction, missed: false,
-        opensWait: e.direction === 'in', closesWait: e.direction === 'out', contact: true,
+        opensWait: e.direction === 'in', closesWait: e.direction === 'out', contact: true, conversation: e.direction === 'in',
         label: e.direction === 'out'
           ? `courriel envoyé par ${e.owner ?? e.from}${who ? ` à ${who}` : ''}`
           : `courriel reçu de ${who || e.from}`,
@@ -154,6 +177,7 @@ function buildTouches(d: Dossier, nowMs: number): Touch[] {
     ...d.calls.map((c): Touch => ({
       at: Date.parse(c.start), kind: 'call', direction: c.type === 'out' ? 'out' : 'in', missed: c.type === 'missed',
       opensWait: c.type === 'missed', closesWait: c.type !== 'missed', contact: c.type !== 'missed',
+      conversation: c.type === 'in' || (c.type === 'out' && c.durationSec >= SHORT_CALL_SEC),
       label: c.type === 'missed'
         ? `appel manqué de ${c.contactName ?? 'le client'}`
         : c.type === 'in'
@@ -162,11 +186,11 @@ function buildTouches(d: Dossier, nowMs: number): Touch[] {
     })),
     ...d.notes.map((n): Touch => ({
       at: Date.parse(n.created), kind: 'note', direction: n.automated ? 'in' : 'out', missed: false,
-      opensWait: n.automated, closesWait: !n.automated, contact: false,
+      opensWait: n.automated, closesWait: !n.automated, contact: false, conversation: false,
       label: n.automated ? 'note automatique (formulaire web ou intégration)' : `note de ${n.author}`,
     })),
     ...d.meetings.map((m): Touch => ({
-      at: Date.parse(m.start), kind: 'meeting', direction: 'out', missed: false, opensWait: false, closesWait: true, contact: true,
+      at: Date.parse(m.start), kind: 'meeting', direction: 'out', missed: false, opensWait: false, closesWait: true, contact: true, conversation: true,
       label: `rencontre « ${m.title} »${m.owner ? ` avec ${m.owner}` : ''}`,
     })),
   ];
@@ -200,6 +224,11 @@ function lateDays(o: Overdue, today: string): number | null {
   return o.dueDate ? Math.max(0, daysBetween(o.dueDate, today)) : null;
 }
 
+/** Days past due, or, without a due date (Books unreachable), counted from net-30 terms. */
+function lateDaysOrTerms(o: Overdue, today: string): number {
+  return lateDays(o, today) ?? Math.max(0, daysBetween(o.date, today) - 30);
+}
+
 function overdueText(o: Overdue, today: string): string {
   const late = lateDays(o, today);
   return `EN RETARD${late !== null ? ` depuis ${late} j (échue le ${o.dueDate})` : ''}, solde dû ${money.format(o.balance)} avant taxes` +
@@ -217,11 +246,13 @@ export function buildPrompt(d: Dossier, now = new Date()): BuiltPrompt {
   const touches = buildTouches(d, nowMs);
   const stats = computeStats(d, touches, nowMs);
   const overdue = overdueInvoices(d);
+  const base = baseTemperature(d, touches, stats, overdue, today, nowMs);
   const lines: string[] = [];
 
   // ── Computed facts ──
   lines.push('## Faits calculés (exacts : reprends-les tels quels)');
   lines.push(...computeFacts(d, touches, stats, overdue, today, nowMs));
+  lines.push(`- Température selon les règles chiffrées : ${base.temperature}. ${base.reason}`);
 
   // ── Account ──
   sources.A1 = { kind: 'account', date: null, module: 'Accounts', record_id: d.account.zoho_account_id, url: crmRecordUrl('Accounts', d.account.zoho_account_id) };
@@ -276,7 +307,11 @@ export function buildPrompt(d: Dossier, now = new Date()): BuiltPrompt {
       lines.push('Total par année civile : ' + [...byYear.entries()].sort((x, y) => y[0].localeCompare(x[0]))
         .map(([y, v]) => `${y} : ${money.format(v.total)} (${v.count} fact.)`).join(' · '));
     }
-    const listed = d.invoices.filter((i) => Date.parse(i.date) >= statsSince || overdueById.has(i.id) || i.status === 'overdue');
+    // Every overdue invoice is listed whatever its age, then the year's others, newest first.
+    const late = d.invoices.filter((i) => overdueById.has(i.id) || i.status === 'overdue');
+    const recentOthers = d.invoices.filter((i) => Date.parse(i.date) >= statsSince && !late.includes(i));
+    const listed = [...late, ...recentOthers.slice(0, Math.max(0, MAX_INVOICE_LINES - late.length))]
+      .sort((x, y) => y.date.localeCompare(x.date));
     if (listed.length < d.invoices.length) lines.push(`Détail : factures des 12 derniers mois et factures en retard (${d.invoices.length - listed.length} plus anciennes non détaillées).`);
     let n = 0;
     for (const inv of listed.slice(0, MAX_INVOICE_LINES)) {
@@ -332,8 +367,7 @@ export function buildPrompt(d: Dossier, now = new Date()): BuiltPrompt {
     const head = e.direction === 'out'
       ? `courriel envoyé par ${e.owner ?? e.from} à ${contacts || e.to.join(', ')}`
       : `courriel reçu de ${contacts || e.from}${e.owner ? ` (boîte de ${e.owner})` : ''}`;
-    const tone = [e.intent && `intention : ${e.intent}`, e.sentiment && `ton : ${e.sentiment}`].filter(Boolean).join(', ');
-    return `${head} · Objet : ${e.subject || '(sans objet)'}${tone ? ` · ${tone}` : ''}` +
+    return `${head} · Objet : ${e.subject || '(sans objet)'}` +
       (e.text ? `\n${quoteBlock(e.text)}` : '\n    | (contenu non chargé)');
   };
   for (const e of d.emails) {
@@ -416,6 +450,7 @@ export function buildPrompt(d: Dossier, now = new Date()): BuiltPrompt {
   };
 
   return {
+    base,
     text: lines.join('\n'),
     sources,
     contacts: d.contacts.map((c) => ({ id: c.id, name: c.name })),
@@ -506,13 +541,138 @@ function computeFacts(d: Dossier, touches: Touch[], s: CardStats, overdue: Overd
   if (overdue.length === 0) {
     out.push(`- Factures en retard : aucune${d.overdue.live ? ' (vérifié dans Zoho Books)' : ''}.`);
   } else {
-    const oldest = Math.max(...overdue.map((o) => lateDays(o, today) ?? 0));
+    const oldest = Math.max(...overdue.map((o) => lateDaysOrTerms(o, today)));
     const withTax = overdue.every((o) => o.balanceTaxIncl !== null)
       ? ` (${money.format(overdue.reduce((t, o) => t + (o.balanceTaxIncl ?? 0), 0))} taxes incluses)` : '';
+    const beyond = overdue.filter((o) => lateDaysOrTerms(o, today) > RISK_LATE_DAYS);
     out.push(`- Factures en retard${d.overdue.live ? ' (Zoho Books, en direct)' : ''} : ${overdue.length}, solde dû ${money.format(s.overdue.total)} avant taxes${withTax}` +
-      `${oldest ? ` ; la plus ancienne est échue depuis ${oldest} j` : ''}.`);
+      `${oldest ? ` ; la plus ancienne est échue depuis ${oldest} j` : ''}` +
+      ` ; ${beyond.length ? `${beyond.length} depuis plus de ${RISK_LATE_DAYS} jours (${money.format(beyond.reduce((t, o) => t + o.balance, 0))} avant taxes)` : `aucune depuis plus de ${RISK_LATE_DAYS} jours`}.`);
   }
   return out;
+}
+
+// ─── Temperature ──────────────────────────────────────────────────────────────
+// The figures decide the base temperature; the model may only raise it, on
+// written evidence it cites (see index.ts). Thresholds measured on this data:
+
+/** Past due beyond the first aging bucket (1-30 days): collection territory. */
+const RISK_LATE_DAYS = 30;
+/** Before tax; a leftover balance below this is not a risk. */
+const RISK_MIN_BALANCE = 100;
+/** 98.8 % of quotes accepted since 2025 were accepted within 30 days of being sent. */
+const HOT_QUOTE_DAYS = 30;
+/** An accepted quote is invoiced on delivery; past this it is no longer news. */
+const HOT_ACCEPTED_DAYS = 60;
+/** 95 % of repeat purchases come within 13 months; almost none after 12. */
+const ACTIVE_DAYS = 365;
+/** A real exchange within a quarter keeps a relationship warm. */
+const EXCHANGE_DAYS = 90;
+
+/**
+ * The first rule that matches, in this order: a_risque, chaud, client_actif,
+ * tiede, dormant, froid.
+ */
+function baseTemperature(d: Dossier, touches: Touch[], s: CardStats, overdue: Overdue[], today: string, nowMs: number): BaseTemperature {
+  const base = baseRule(d, touches, s, overdue, today, nowMs);
+  // A short date ends in a period ("7 oct."): one period closes the sentence.
+  return { ...base, reason: base.reason.replace(/\.+$/, '.') };
+}
+
+function baseRule(d: Dossier, touches: Touch[], s: CardStats, overdue: Overdue[], today: string, nowMs: number): BaseTemperature {
+  // 1. Money past due beyond the first aging bucket.
+  const late = overdue.filter((o) => lateDaysOrTerms(o, today) > RISK_LATE_DAYS);
+  const lateBalance = late.reduce((t, o) => t + o.balance, 0);
+  if (late.length && lateBalance >= RISK_MIN_BALANCE) {
+    const oldest = Math.max(...late.map((o) => lateDaysOrTerms(o, today)));
+    return {
+      temperature: 'a_risque',
+      reason: late.length === 1
+        ? `Facture ${late[0].number} de ${money.format(late[0].balance)} avant taxes en retard depuis ${oldest} j.`
+        : `${late.length} factures en retard depuis plus de ${RISK_LATE_DAYS} jours (${money.format(lateBalance)} avant taxes), la plus ancienne depuis ${oldest} j.`,
+    };
+  }
+
+  // 2. A deal in progress.
+  const openQuote = d.quotes.find((q) => OPEN_QUOTE.has(q.status) && daysBetween(q.date, today) <= HOT_QUOTE_DAYS);
+  if (openQuote) {
+    return {
+      temperature: 'chaud',
+      reason: `Devis${openQuote.title ? ` « ${openQuote.title} »` : ''} de ${money.format(openQuote.total)} envoyé le ${short(openQuote.date, today)}, en attente du client.`,
+    };
+  }
+  const accepted = d.quotes.find((q) => q.status === 'accepted' && daysBetween(q.acceptedOn ?? q.date, today) <= HOT_ACCEPTED_DAYS);
+  if (accepted) {
+    return {
+      temperature: 'chaud',
+      reason: `Devis${accepted.title ? ` « ${accepted.title} »` : ''} de ${money.format(accepted.total)} accepté le ${short(accepted.acceptedOn ?? accepted.date, today)}, pas encore facturé.`,
+    };
+  }
+  const upcoming = d.meetings.filter((m) => Date.parse(m.start) > nowMs).sort((x, y) => Date.parse(x.start) - Date.parse(y.start))[0];
+  if (upcoming) {
+    return { temperature: 'chaud', reason: `Rencontre « ${upcoming.title} » prévue le ${short(upcoming.start, today)}.` };
+  }
+
+  // 3. Bought within the normal buying cycle.
+  const bought = d.invoices.filter((i) => !i.isCredit);
+  const recentBuys = bought.filter((i) => daysBetween(i.date, today) <= ACTIVE_DAYS);
+  if (recentBuys.length) {
+    const first = bought[bought.length - 1];
+    return {
+      temperature: 'client_actif',
+      reason: daysBetween(first.date, today) <= ACTIVE_DAYS
+        ? `Premier achat le ${short(first.date, today)} ; ${money.format(s.invoiced_12m)} facturés au cours des 12 derniers mois.`
+        : `${money.format(s.invoiced_12m)} facturés au cours des 12 derniers mois (${count(recentBuys.length, 'facture', 'factures')}), la dernière le ${short(recentBuys[0].date, today)}.`,
+    };
+  }
+
+  // 4. Talking, but not buying.
+  const exchange = touches.find((t) => t.conversation && nowMs - t.at <= EXCHANGE_DAYS * DAY_MS);
+  if (exchange) {
+    return {
+      temperature: 'tiede',
+      reason: `Dernier échange réel le ${short(new Date(exchange.at).toISOString(), today)} (${exchange.label}), sans affaire en cours.`,
+    };
+  }
+
+  // 5. Bought before, gone quiet.
+  if (bought.length) {
+    return {
+      temperature: 'dormant',
+      reason: `Dernière facture le ${short(bought[0].date, today)}, et aucun échange réel avec le client depuis plus de ${EXCHANGE_DAYS} jours.`,
+    };
+  }
+
+  // 6. Everything else.
+  return {
+    temperature: 'froid',
+    reason: touches.length || d.quotes.length
+      ? `Aucune facture, aucune affaire en cours et aucun échange réel avec le client depuis ${EXCHANGE_DAYS} jours.`
+      : 'Aucun échange, devis ni facture au dossier.',
+  };
+}
+
+const PRIORITY: Temperature[] = ['a_risque', 'chaud', 'client_actif', 'tiede', 'dormant', 'froid'];
+/** Reachable on written evidence; client_actif, dormant and froid follow from figures alone. */
+const RAISABLE = new Set<Temperature>(['a_risque', 'chaud', 'tiede']);
+/** Evidence of a raise is something somebody wrote or did: an email, note, call, meeting or task. */
+const EVIDENCE = /^[ENCRT]\d+$/;
+
+/**
+ * The card's temperature: the model's choice when it is the base, or a higher
+ * raisable one backed by cited evidence; otherwise the base and its reason.
+ */
+export function settleTemperature(
+  base: BaseTemperature,
+  chosen: Temperature,
+  reason: string,
+  sources: string[],
+): { temperature: Temperature; reason: string; sources: string[]; adjusted: boolean } {
+  if (chosen === base.temperature) return { temperature: chosen, reason, sources: [], adjusted: false };
+  const evidence = sources.filter((s) => EVIDENCE.test(s));
+  const raised = PRIORITY.indexOf(chosen) < PRIORITY.indexOf(base.temperature);
+  if (raised && RAISABLE.has(chosen) && evidence.length) return { temperature: chosen, reason, sources: evidence, adjusted: false };
+  return { temperature: base.temperature, reason: base.reason, sources: [], adjusted: true };
 }
 
 function computeStats(d: Dossier, touches: Touch[], nowMs: number): CardStats {
@@ -561,7 +721,7 @@ Le message contient, entre <dossier> et </dossier>, tout ce que tu sais du compt
 1. N'affirme que ce que le dossier dit. N'invente aucun montant, date, nom, besoin, intention ni sentiment. Une information absente n'est pas une information négative : ne conclus rien de ce qui manque, surtout pour une source listée dans « Données manquantes ».
 2. Le dossier ne contient que ce qui est consigné dans le CRM. Les courriels d'un représentant n'y entrent que s'il a connecté sa boîte de courriel à Zoho, et bien des échanges se font sans laisser de trace. Un client qui commande ou est facturé régulièrement parle donc forcément à Affichez : ne présente jamais l'absence de courriels, d'appels ou de notes comme un silence du client. Tu peux dire, sans en faire un problème, que les échanges ne sont pas consignés.
 3. Chiffres : reprends les montants et les nombres des faits calculés ou des éléments cités. N'additionne pas et n'estime pas toi-même. Montants en dollars canadiens avant taxes, au format « 12 500 $ ». Pour une facture en retard, tu peux donner en plus le solde taxes incluses, en le disant.
-4. Dates et durées : reprends les anciennetés indiquées (« il y a 12 j », « depuis 32 j »). Écris les dates « 9 oct. » pour l'année en cours, « 9 oct. 2025 » sinon. N'écris « récemment », « la semaine dernière » ou « depuis longtemps » que si l'ancienneté le confirme.
+4. Dates et durées : reprends les anciennetés indiquées (« il y a 12 j », « depuis 32 j »). Écris les dates « 9 oct. » pour l'année en cours, « 9 oct. 2025 » sinon, et le premier du mois « 1er oct. ». N'écris « récemment », « la semaine dernière » ou « depuis longtemps » que si l'ancienneté le confirme.
 5. Qui a fait quoi : un courriel envoyé ou un appel sortant vient d'Affichez ; un courriel reçu, un appel reçu ou un appel manqué vient du client. Nomme les représentants par leur nom complet la première fois. N'attribue jamais au client une action d'Affichez, ni l'inverse.
 6. Un appel sortant marqué « (tentative) » a duré moins de 30 secondes : c'est un message vocal ou une absence de réponse, pas une conversation.
 7. Abréviations des notes de représentants : « LM » message laissé, « BV » boîte vocale, « cb » rappel prévu, « RV » rendez-vous, « soum. » soumission, « texte » SMS envoyé. Reformule-les en phrases claires.
@@ -571,25 +731,33 @@ Le message contient, entre <dossier> et </dossier>, tout ce que tu sais du compt
 11. Si deux éléments se contredisent, le plus récent l'emporte.
 12. Les identifiants entre crochets ([E1], [F2]…) vont uniquement dans « sources », jamais dans les textes.
 
-# Température : applique la première règle qui correspond
-1. a_risque : au moins une facture en retard depuis plus de 30 jours ; ou au moins deux factures en retard ; ou une insatisfaction, une plainte, une contestation ou un litige exprimés par le client ; ou l'annonce d'un arrêt, d'une baisse, d'un non-renouvellement ou d'un départ vers un concurrent.
-2. chaud : une affaire en cours : un devis ouvert envoyé dans les 90 derniers jours ; une demande de prix, de soumission ou de rencontre faite par le client dans les 60 derniers jours ; un engagement du client dans les 60 derniers jours (accord, commande annoncée) pas encore facturé ; ou une rencontre à venir.
-3. client_actif : facturé sur au moins 2 mois distincts au cours des 12 derniers mois.
-4. tiede : des échanges réels avec le client (courriel reçu, appel abouti, rencontre) dans les 90 derniers jours, sans engagement clair.
-5. dormant : déjà facturé, mais aucune facture depuis plus de 12 mois et aucun échange réel avec le client depuis plus de 90 jours.
-6. froid : tous les autres cas (peu ou pas de réponse du client, aucun projet en vue, dossier presque vide).
-Une seule facture en retard depuis 30 jours ou moins chez un client par ailleurs sain ne suffit pas pour a_risque : signale-la plutôt dans un point clé de ton « attention ».
+# Température
+Le système calcule une température de base à partir des chiffres et la donne dans les faits calculés (« Température selon les règles chiffrées »). Règles, dans l'ordre de priorité (la première qui correspond l'emporte) :
+1. a_risque : au moins 100 $ avant taxes échus depuis plus de 30 jours.
+2. chaud : un devis ouvert envoyé dans les 30 derniers jours ; un devis accepté dans les 60 derniers jours et pas encore facturé ; ou une rencontre à venir.
+3. client_actif : facturé au cours des 12 derniers mois.
+4. tiede : un échange réel avec le client dans les 90 derniers jours (courriel reçu du client, appel abouti, rencontre).
+5. dormant : déjà facturé, mais rien depuis plus de 12 mois et aucun échange réel depuis 90 jours.
+6. froid : tous les autres cas.
+
+Reprends la température de base. Tu ne peux la remplacer que par une température de priorité plus haute, et seulement si un élément précis du dossier (courriel, note, appel, rencontre ou tâche) le prouve noir sur blanc :
+- a_risque : le client exprime une insatisfaction, une plainte, une contestation ou un litige, ou annonce un arrêt, une baisse, un non-renouvellement ou un départ vers un concurrent.
+- chaud : dans les 30 derniers jours, le client a demandé un prix, une soumission ou une rencontre, ou s'est engagé à acheter (accord, commande annoncée), sans que ce soit déjà facturé.
+- tiede : une note de représentant des 90 derniers jours rapporte une vraie conversation avec le client.
+Un silence, des appels sans réponse, une impression ou une supposition ne suffisent jamais. Ne choisis jamais une température de priorité plus basse que la base : le système la rétablirait.
+Une facture en retard depuis 30 jours ou moins n'est pas un risque : signale-la dans un point clé de ton « attention ».
 
 # Champs à remplir
-- key_points : 3 à 5 faits, du plus utile au moins utile pour le représentant (un problème ou une attente du client en premier). Chaque point est une phrase autonome et vérifiable. Remplis d'abord « sources » avec les identifiants qui le prouvent (A1 pour un fait du profil ou des faits calculés), puis écris le texte à partir de ces seuls éléments. tone : « positif » (intérêt, commande, bonne relation), « attention » (risque, retard, objection, demande sans réponse, silence prolongé), « neutre » (contexte).
+- key_points : 3 à 5 faits, du plus utile au moins utile pour le représentant (un problème ou une attente du client en premier). Chaque point est une phrase autonome et vérifiable. Remplis d'abord « sources » avec les identifiants qui le prouvent (A1 pour un fait du profil ou des faits calculés), puis écris le texte à partir de ces seuls éléments. tone : « positif » (intérêt, commande, bonne relation), « attention » (risque, retard, objection, demande du client sans réponse, tentatives d'Affichez restées sans réponse), « neutre » (contexte).
 - summary : 2 à 4 phrases. Qui est ce client pour Affichez (ce qu'il achète ou demande, depuis quand, pour combien), où en est la relation aujourd'hui (dernier échange réel, ce qui est en cours) et ce qui reste en suspens. Ne recopie pas les points clés.
 - next_steps : 0 à 3 actions concrètes, seulement si le dossier les justifie : une demande du client sans réponse, un rappel promis, un devis ouvert à relancer, une facture en retard, une rencontre à confirmer. Si une tâche ouverte d'un représentant prévoit déjà la même action auprès du même contact, ne la repropose pas : mentionne-la dans un point clé, avec son échéance.
   - sources : les identifiants qui justifient l'action.
   - title : commence par un verbe à l'infinitif, 80 caractères au plus, précis (qui, quoi, à propos de quoi), utilisable tel quel comme titre de tâche CRM.
   - contact_name : le nom exact d'un contact de la liste [P…] visé par l'action, sinon null.
   - due_in_days : 0 ou 1 si le client attend une réponse ou si une facture est en retard depuis plus de 30 jours ; pour relancer un devis ouvert, sa date de « suivi prévu » si elle est indiquée ; sinon la date promise dans le dossier ; à défaut, 2 à 5 jours.
-- temperature_reason : une phrase qui nomme le fait décisif avec son chiffre ou sa date, par exemple « Facture de 24 180 $ en retard depuis 32 j et appels sans réponse depuis le 22 sept. ». Énonce le fait, pas la règle ni le seuil appliqués.
-- temperature : selon les règles ci-dessus.
+- temperature_sources : si tu remplaces la température de base, les identifiants des éléments qui le prouvent ; sinon une liste vide.
+- temperature_reason : une phrase qui nomme le fait décisif avec son chiffre ou sa date, par exemple « Facture de 24 180 $ en retard depuis 32 j et appels sans réponse depuis le 22 sept. ». Si tu gardes la base, reprends sa raison ; tu peux la préciser sans changer ses chiffres. Énonce le fait, pas la règle ni le seuil appliqués.
+- temperature : la température de base, ou une température plus haute justifiée comme ci-dessus.
 
 Si le dossier est presque vide, dis-le simplement, garde des points clés factuels et ne propose une action que si un élément précis la justifie.
 

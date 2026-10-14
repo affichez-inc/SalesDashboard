@@ -24,7 +24,7 @@
 
 import { type Db, gatherDossier, WINDOW_MONTHS } from './gather.ts';
 import { summarize } from './model.ts';
-import { buildPrompt, day, SYSTEM_PROMPT, userMessage } from './prompt.ts';
+import { buildPrompt, day, settleTemperature, SYSTEM_PROMPT, userMessage } from './prompt.ts';
 import { SB_HEADERS } from './zoho.ts';
 
 declare const EdgeRuntime: { waitUntil(p: Promise<unknown>): void } | undefined;
@@ -226,19 +226,23 @@ async function runGeneration(rowId: number, accountId: string): Promise<void> {
     const keyPoints = out.summary.key_points.slice(0, MAX_POINTS).map((p) => ({ text: p.text, tone: p.tone, sources: cite(p.sources) }));
     const nextSteps = out.summary.next_steps.slice(0, MAX_STEPS).map((s) => {
       const contact = s.contact_name ? byName.get(nameKey(s.contact_name)) ?? null : null;
+      const dueIn = Math.min(MAX_DUE_DAYS, Math.max(0, Math.round(s.due_in_days)));
       return {
         title: s.title.slice(0, 120),
-        due_in_days: Math.min(MAX_DUE_DAYS, Math.max(0, Math.round(s.due_in_days))),
-        due_date: dueDate(s.due_in_days),
+        due_in_days: dueIn,
+        due_date: dueDate(dueIn),
         contact_id: contact?.id ?? null,
         contact_name: contact?.name ?? null,
         sources: cite(s.sources),
       };
     });
-    const cited = new Set([...keyPoints, ...nextSteps].flatMap((x) => x.sources));
+    // The figures set the temperature; the model may only raise it on cited evidence.
+    const temp = settleTemperature(built.base, out.summary.temperature, out.summary.temperature_reason, cite(out.summary.temperature_sources));
+    if (temp.adjusted) console.warn('account-summary: temperature reset to base', accountId, out.summary.temperature, '->', temp.temperature);
+    const cited = new Set([...keyPoints, ...nextSteps, temp].flatMap((x) => x.sources));
     const sources = Object.fromEntries(Object.entries(built.sources).filter(([id]) => cited.has(id)));
     const unverified = unverifiedAmounts(
-      [out.summary.summary, out.summary.temperature_reason, ...keyPoints.map((p) => p.text), ...nextSteps.map((s) => s.title)],
+      [out.summary.summary, temp.reason, ...keyPoints.map((p) => p.text), ...nextSteps.map((s) => s.title)],
       built.text,
     );
     if (unverified.length) console.warn('account-summary: amounts not found in the dossier', accountId, unverified);
@@ -250,8 +254,10 @@ async function runGeneration(rowId: number, accountId: string): Promise<void> {
         name: dossier.account.account_name,
         rep_name: dossier.account.rep_name,
       },
-      temperature: out.summary.temperature,
-      temperature_reason: out.summary.temperature_reason,
+      temperature: temp.temperature,
+      temperature_reason: temp.reason,
+      temperature_sources: temp.sources,
+      temperature_base: built.base,
       summary: out.summary.summary,
       key_points: keyPoints,
       next_steps: nextSteps,
@@ -260,7 +266,10 @@ async function runGeneration(rowId: number, accountId: string): Promise<void> {
       sources,
       window_months: WINDOW_MONTHS,
       warnings: dossier.warnings,
-      checks: { unverified_amounts: unverified },
+      checks: {
+        unverified_amounts: unverified,
+        temperature: { base: built.base.temperature, model: out.summary.temperature, adjusted: temp.adjusted },
+      },
       duration_ms: Date.now() - started,
     };
 

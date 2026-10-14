@@ -480,11 +480,12 @@ Migration `20261007120000_account_spend_and_contact_reach.sql`, function
   sends the account ids to `meta-custom-audience`, which reads the contacts with
   the caller's token, normalises and SHA-256 hashes email, phone, names, city,
   province, postal code and country (`normalize.ts`), creates a customer-list
-  audience on `META_AUDIENCE_AD_ACCOUNT_ID` and uploads in one session. A contact
-  is sent only when `email_opt_out = false` **and** `no_marketing = false`: a
-  refusal or a NULL on either (not synced yet, or not returned to the sync) leaves
-  it out by default. Unknown is never read as consent; keep that rule identical in
-  the function and in `accountContacts.refusedMarketing`. A list holding any
+  audience on `META_AUDIENCE_AD_ACCOUNT_ID` and uploads in one session. **The
+  dialog sends every contact with an email or a phone, marketing refusals
+  included** (`exclude_opted_out: false`, a business decision). The function
+  still honours the flag for another
+  caller, and without it leaves out any contact whose `email_opt_out` or
+  `no_marketing` is not `false` (NULL counts as a refusal). A list holding any
   acquired-list account (`is_bulk_import`) is declared
   `BOTH_USER_AND_PARTNER_PROVIDED`, otherwise `USER_PROVIDED_ONLY`.
 - **The audit row comes first.** `meta_audience_log` (admins read it) gets a
@@ -504,8 +505,9 @@ Migration `20261007120000_account_spend_and_contact_reach.sql`, function
   after a create that did succeed would leave a second, empty audience. The token
   needs `ads_management`, the system user full control of the ad account, and a
   human admin must have accepted the Custom Audience terms. Only an explicit
-  permission list without `ads_management` blocks the dialog; the terms flag is a
-  warning, and Meta's own refusal at create time (1870034) is the real test.
+  permission list without `ads_management` blocks the dialog. The terms flag is
+  not shown: Meta's own refusal at create time (1870034) is the real test, and the
+  error it returns says the terms must be accepted.
 - **Avoid amounts in an audience name.** Meta blocks audiences whose name or
   description suggests financial status, which is why the default name is just
   "Comptes Affichez <date>".

@@ -1,11 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { X, Loader2, ExternalLink, Download, AlertTriangle, CheckCircle2, ShieldCheck } from 'lucide-react';
+import { X, Loader2, ExternalLink, Download, AlertTriangle, CheckCircle2 } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
 import { downloadCsv, type CsvColumn } from '../../lib/csv';
 import { cn } from '../../lib/utils';
 import { ChannelLogoTile } from '../advertising/ChannelLogo';
 import type { AccountContactExportRow, ZohoAccountRow } from '../../types/database';
-import { fetchAccountContacts, refusedMarketing } from './accountContacts';
+import { fetchAccountContacts } from './accountContacts';
 
 const FN_URL = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/meta-custom-audience`;
 
@@ -13,12 +13,8 @@ type MetaStatus = {
     configured: boolean;
     ad_account: { id: string; name: string | null } | null;
     has_permission: boolean | null;
-    terms_accepted: boolean | null;
-    terms_url: string | null;
     /** Blocks sending. */
     problem: string | null;
-    /** Shown, does not block (the create call is the real test). */
-    warning: string | null;
 };
 
 type CreateResult = {
@@ -36,7 +32,6 @@ type CreateResult = {
     num_received: number;
     num_invalid_entries: number;
     sent_ids: string[];
-    opted_out_ids: string[];
     unreachable_ids: string[];
 };
 
@@ -62,15 +57,13 @@ async function callAudienceFn<T>(body: object): Promise<T> {
 const hasText = (v: string | null) => !!v && v.trim() !== '';
 const reachable = (c: AccountContactExportRow) =>
     hasText(c.email) || hasText(c.secondary_email) || hasText(c.phone) || hasText(c.mobile);
-/** A refusal flag not known yet: counted as a refusal, see refusedMarketing. */
-const statusUnknown = (c: AccountContactExportRow) => c.email_opt_out === null || c.no_marketing === null;
 
 type Phase = 'loading' | 'ready' | 'sending' | 'done';
 
 /**
  * "Créer une audience Meta" for the accounts currently filtered on Comptes ·
- * Détail: a name, one choice about marketing refusals, and a summary of who
- * will be sent before anything leaves.
+ * Détail: a name and a summary of who will be sent before anything leaves.
+ * Every contact with an email or a phone is sent, marketing refusals included.
  *
  * The browser sends only the account ids. The function reads the contacts
  * itself, with the caller's token, normalises and hashes them, and uploads.
@@ -90,9 +83,8 @@ export function MetaAudienceModal({ loadAccounts, filters, defaultName, onClose 
     const [contacts, setContacts] = useState<AccountContactExportRow[]>([]);
     const [name, setName] = useState(defaultName);
     const [description, setDescription] = useState('');
-    const [excludeRefused, setExcludeRefused] = useState(true);
     // Two kinds of error: a failed load leaves nothing to send, a failed send
-    // can be retried after changing the name or the option, so it must not lock
+    // can be retried after changing the name, so it must not lock
     // the button.
     const [loadError, setLoadError] = useState<string | null>(null);
     const [sendError, setSendError] = useState<string | null>(null);
@@ -133,19 +125,13 @@ export function MetaAudienceModal({ loadAccounts, filters, defaultName, onClose 
     const pressedOnBackdrop = useRef(false);
 
     const summary = useMemo(() => {
-        const withReach = contacts.filter(reachable);
-        const refused = contacts.filter(c => refusedMarketing(c));
-        const unknown = contacts.filter(statusUnknown);
-        const toSend = withReach.filter(c => !excludeRefused || !refusedMarketing(c));
         return {
             contacts: contacts.length,
             withEmail: contacts.filter(c => hasText(c.email) || hasText(c.secondary_email)).length,
             withPhone: contacts.filter(c => hasText(c.phone) || hasText(c.mobile)).length,
-            refused: refused.length,
-            unknown: unknown.length,
-            toSend: toSend.length,
+            toSend: contacts.filter(reachable).length,
         };
-    }, [contacts, excludeRefused]);
+    }, [contacts]);
 
     const ready = status !== null && status.problem === null;
     const canSend = phase === 'ready' && ready && name.trim() !== '' && summary.toSend > 0 && !loadError;
@@ -160,7 +146,7 @@ export function MetaAudienceModal({ loadAccounts, filters, defaultName, onClose 
                 name: name.trim(),
                 description: description.trim() || undefined,
                 account_ids: accounts.map(a => a.zoho_account_id),
-                exclude_opted_out: excludeRefused,
+                exclude_opted_out: false,
                 filters,
             });
             setResult(r);
@@ -175,14 +161,8 @@ export function MetaAudienceModal({ loadAccounts, filters, defaultName, onClose 
         if (!result) return;
         const accountName = new Map(accounts.map(a => [a.zoho_account_id, a.account_name]));
         const sent = new Set(result.sent_ids);
-        const optedOut = new Set(result.opted_out_ids);
         const statusOf = (c: AccountContactExportRow) =>
-            sent.has(c.zoho_record_id) ? 'Envoyé'
-            : optedOut.has(c.zoho_record_id)
-                ? (statusUnknown(c) && !(c.email_opt_out || c.no_marketing)
-                    ? 'Exclu : statut d’abonnement inconnu'
-                    : 'Exclu : refuse le marketing')
-            : 'Exclu : ni courriel ni téléphone utilisable';
+            sent.has(c.zoho_record_id) ? 'Envoyé' : 'Exclu : ni courriel ni téléphone utilisable';
         const cols: CsvColumn<AccountContactExportRow>[] = [
             { header: 'Statut',      value: statusOf },
             { header: 'Compte',      value: c => accountName.get(c.account_id) ?? null },
@@ -305,21 +285,6 @@ export function MetaAudienceModal({ loadAccounts, filters, defaultName, onClose 
                                     </div>
                                 </div>
                             )}
-                            {!status?.problem && status?.warning && (
-                                <div className="flex items-start gap-3 rounded-lg bg-tone-warn-soft px-4 py-3 text-sm text-tone-warn-ink">
-                                    <AlertTriangle className="h-5 w-5 shrink-0 mt-0.5" />
-                                    <div className="space-y-1">
-                                        <p className="text-xs">{status.warning}</p>
-                                        {status.terms_url && (
-                                            <a href={status.terms_url} target="_blank" rel="noopener noreferrer" className="link text-xs inline-flex items-center gap-1">
-                                                Page d’acceptation des conditions (administrateur du compte publicitaire)
-                                                <ExternalLink className="h-3 w-3" />
-                                            </a>
-                                        )}
-                                    </div>
-                                </div>
-                            )}
-
                             {status && (
                                 <div className="rounded-lg bg-sand px-4 py-3" translate="no">
                                     <p className="text-2xs font-semibold text-ink-mute uppercase tracking-eyebrow mb-2">Avec les filtres actuels</p>
@@ -359,34 +324,6 @@ export function MetaAudienceModal({ loadAccounts, filters, defaultName, onClose 
                                     disabled={phase === 'sending'}
                                 />
                             </label>
-
-                            <label className="flex items-start gap-3 cursor-pointer">
-                                <input
-                                    type="checkbox"
-                                    checked={excludeRefused}
-                                    onChange={e => { setExcludeRefused(e.target.checked); setSendError(null); }}
-                                    disabled={phase === 'sending'}
-                                    className="mt-0.5 h-4 w-4 accent-ink"
-                                />
-                                <span className="text-sm text-ink-secondary">
-                                    Exclure les contacts qui refusent le marketing
-                                    <span className="text-ink-mute tabular-nums" translate="no"> ({summary.refused.toLocaleString('fr-CA')})</span>
-                                    <span className="block text-xs text-ink-mute mt-0.5">
-                                        Désabonnés des courriels ou case « ne veut pas recevoir nos courriels marketing » cochée dans Zoho.
-                                        {summary.unknown > 0 && (
-                                            <> Le statut de {summary.unknown.toLocaleString('fr-CA')} contact{summary.unknown > 1 ? 's' : ''} n’est
-                                            pas encore connu (synchronisation en attente) : cochée, l’option les exclut aussi.</>
-                                        )}
-                                    </span>
-                                </span>
-                            </label>
-
-                            <p className="flex items-start gap-2 text-xs text-ink-mute">
-                                <ShieldCheck className="h-4 w-4 shrink-0 text-ink-faint" />
-                                Courriels, téléphones, noms et adresses sont normalisés puis hachés (SHA-256) avant
-                                l’envoi : Meta ne reçoit aucune donnée lisible et l’utilise seulement pour retrouver
-                                ces personnes.
-                            </p>
 
                             {(loadError || sendError) && (
                                 <p role="alert" className="rounded-lg bg-tone-critical-soft px-4 py-3 text-sm text-tone-critical-ink">

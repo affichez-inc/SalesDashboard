@@ -58,14 +58,6 @@ export function contactsByAccount(contacts: AccountContactExportRow[]): Map<stri
     return map;
 }
 
-/**
- * Refused marketing email in Zoho, or either flag not known yet - the audience
- * leaves both out. Same rule as the meta-custom-audience function.
- */
-export function refusedMarketing(c: AccountContactExportRow): boolean {
-    return c.email_opt_out !== false || c.no_marketing !== false;
-}
-
 // ─── The grouped export ───────────────────────────────────────────────────────
 //
 // One file, each account followed by its contacts: the account on a "Compte"

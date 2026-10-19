@@ -364,6 +364,49 @@ re-sync cannot wipe a name the back-fill paid an API call for.
 by Morgane and sold by Dominic counts once under each. `/createurs` is admin-only
 and says so on screen; never add its totals to a leaderboard.
 
+### `amount` is Zoho's total minus Zoho's tax — never an estimate
+
+Until 2026-10-19 every sync stored `amount = total / 1.14975`. Audited against
+the live Books API that day (750 documents, three reps' complete 2026): untaxed
+invoices came out 13% low, invoices with fees drifted by dollars, most were a
+cent off — and commissions are paid on `amount`.
+
+The rule now, for `invoices` (credit notes included, negative) and `sales`:
+
+- **`amount = total_incl_tax − tax_total`**, derived by the
+  `zoho_pretax_amount` trigger. **Shipping and fees stay in** — commission is paid
+  on them (QC-022298: $3,050 goods + $312.15 shipping = $3,362.15). That is why
+  Zoho's `sub_total`, which drops shipping, is not used.
+- The list endpoints carry `total` but **no tax**; `tax_total` is on the detail
+  payload only. So the syncs write `total_incl_tax` (never `amount`), and the
+  tax arrives from a detail read: immediately for anything `zoho-invoice-sync`
+  just wrote, and from **`zoho-pretax-sync`** (cron every 2 min, quota-aware,
+  newest first) for everything else, quotes included.
+- `tax_checked_total` is the total the tax was read against. When Zoho's total
+  changes, the row falls back to the estimate and re-queues instead of pairing a
+  new total with an old tax. `get_pretax_backfill_status()` reports progress.
+- **Never write `amount` from a sync again.** Leaving it out of the payload is
+  what stops a list re-sync overwriting an exact figure.
+
+Zoho Books' daily API allowance is **50,000 calls for QC and 10,000 for MTL**
+(`x-rate-limit-*` response headers); the back-fill stops an org once less than
+30% is left.
+
+### Deleted and voided documents leave the table
+
+Nothing in Zoho reports a deletion, so the incremental sync never saw one: on
+2026-10-19, 28 documents deleted in Zoho and 5 voided ones were still counted
+(net −$5,469, mostly credit notes). `zoho-invoice-sync` with `x-reconcile: true`
+now runs hourly per office (`zoho-invoice-reconcile-{qc,mtl}-1h`): it lists every
+document from January of last year, rewrites rows that disagree with Zoho, and
+removes rows Zoho deleted or voided — each removal confirmed by a detail read,
+never inferred from the list, and skipped entirely if more than 50 go missing at
+once. A voided document is deleted rather than set to `void`, because not every
+RPC filters on status.
+
+Statuses were audited at the same time and were right: all 4,412 documents of
+2026 matched Zoho. A payment does reach the 5-minute incremental sync.
+
 ### The syncs no longer discard records silently
 
 `zoho-invoice-sync` and `zoho-sync` used to `continue` past any record whose

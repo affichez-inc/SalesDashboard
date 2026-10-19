@@ -395,6 +395,10 @@ verify_jwt = false
 [functions.zoho-quote-creator-sync]
 verify_jwt = false
 
+# Cron-driven (pg_cron's net.http_post sends no JWT): the pre-tax back-fill.
+[functions.zoho-pretax-sync]
+verify_jwt = false
+
 # Cron-driven; pg_cron's net.http_post sends no JWT.
 [functions.ads-spend-sync]
 verify_jwt = false

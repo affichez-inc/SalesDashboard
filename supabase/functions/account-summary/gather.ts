@@ -27,7 +27,13 @@ const BULK_SOURCE = /mass|workflow|campaign|cadence|auto/i;
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 export interface Db {
-  select<T>(table: string, q: { select: string; eq?: Record<string, string>; order?: string }): Promise<T[]>;
+  select<T>(table: string, q: {
+    select: string;
+    eq?: Record<string, string>;
+    /** Values are ids: digits only. */
+    in?: Record<string, string[]>;
+    order?: string;
+  }): Promise<T[]>;
 }
 
 export interface AccountProfile {

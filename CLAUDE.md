@@ -670,6 +670,44 @@ those two channels. Setup and credentials: **`docs/ADVERTISING.md`**.
   RPC returns `window_ends_on`; `isCohortOpen()` in `components/advertising/channel.ts` marks those
   figures as provisional. Do not remove it — the most recent month is always open.
 
+### AI account summaries: nightly run and model costs
+
+The `account-summary` function writes the "Résumé IA du compte" card behind the Zoho widget
+(migrations `20261012180000_account_ai_summaries.sql`, `20261019180000_account_summary_nightly_costs.sql`).
+The model is **GLM-5.3 through OpenRouter** at reasoning effort `high`, with a strict JSON schema
+(`openrouter.ts`, `model.ts`). Providers are tried in the order Parasail, Fireworks, Nebius, with
+`data_collection: deny` and `max_price` at the list price ($1.40 / $4.40 per M), because a provider
+slug also matches its dearer `/fast` variant. Nebius is last: it bills cached prompt tokens at the
+full price.
+
+- **Two triggers, one table.** A click in the widget (`trigger = 'manual'`) and the 1 AM run
+  (`'nightly'`) both write `account_ai_summaries`. Night rows go `queued → running → done | failed`,
+  or `skipped` (`fresh`, `already_queued`, `limit`). The widget shows the latest `done` row by
+  `started_at` (when the data was read), never by `created_at`, which is queue time for a night row,
+  and reports failures of manual clicks only.
+- **1 AM Montreal, in UTC cron.** `account-summary-nightly` fires at 05:00 and 06:00 UTC and only the
+  one that falls at 1 AM local posts; runs are unique per `local_date`. The window runs from the end
+  of the last successful run (`account_ai_summary_window`), so a failed night is covered by the next.
+  `account-summary-worker-1m` starts at most 3 concurrent generations, 6 accounts per worker. Both
+  jobs read the key from the Vault secret **`account_summary_key`**: without it they post nothing.
+- **What counts as activity** (`activity.ts`): notes, tasks created or closed (automated ones too),
+  meetings booked or held, contacts and accounts created, Books quotes and invoices modified.
+  Internal and supplier accounts are left out; at most `SUMMARY_NIGHTLY_LIMIT` (1500) a night.
+  Emails and calls are not detected. A Books record's `last_modified_time` moves on every edit, so
+  replaying an old window misses records edited since; only the live run is complete.
+- **Skipped when already fresh.** An account is queued only if no summary started after its
+  `ready_at`: the last activity plus the mirror lag of its kind (10 min for invoices, 130 min for new
+  contacts and accounts, which the summary reads from the mirror). The claim checks again, so a rep's
+  click between 1 AM and the worker saves the call.
+- **Every model attempt is a row of `ai_model_calls`**, failed ones included (they are billed). The
+  authoritative figure is `cost_usd` (OpenRouter's `usage.cost`); the `cost_*` columns split it with
+  the serving provider's list prices, and `cost_computed_usd` equals `cost_usd` exactly unless a
+  provider discounts. Reasoning tokens are part of `completion_tokens`, billed at the output price.
+  Views, admin-only: `ai_summary_costs` (per generation), `ai_cost_by_account`, `ai_cost_daily`
+  (Montreal day × trigger), `account_ai_summary_run_report`.
+- GLM writes the current year into dates ("7 mai 2026"); `dropCurrentYear` in `clean.ts` restores
+  the card's style. A bare `SUMMARY_MODEL` (no `vendor/`) is a leftover Anthropic id and is ignored.
+
 ### Leads: which table is which
 
 There are two lead tables, and picking the wrong one is the easiest mistake to

@@ -579,6 +579,7 @@ async function refreshPretax(
       total_incl_tax: total,
       tax_total: sign * Number(doc.tax_total),
       tax_checked_total: total,
+      shipping_charge: sign * Number(doc.shipping_charge ?? 0),
     });
   }
   return { read, errors };

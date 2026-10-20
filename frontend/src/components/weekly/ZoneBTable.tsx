@@ -6,6 +6,7 @@ import { SortIcon } from '../SortIcon';
 import { ExportButton } from '../ExportButton';
 import type { CsvColumn } from '../../lib/csv';
 import { RepName } from '../../components/RepAvatar';
+import { ShippingNote } from '../ShippingNote';
 
 type AnyDetailRow = ZoneB_DetailRow | InvDetailRow;
 
@@ -19,6 +20,12 @@ const DETAIL_CSV: CsvColumn<AnyDetailRow>[] = [
     { header: 'Bureau',       value: r => r.office },
     { header: 'Statut',       value: r => String(r.status ?? '') },
     { header: 'Montant',      value: r => Number(r.amount) },
+];
+
+/** Invoices add the shipping inside Montant, so the accountant can see it in the file too. */
+const INVOICE_CSV: CsvColumn<AnyDetailRow>[] = [
+    ...DETAIL_CSV,
+    { header: 'Dont livraison', value: r => ('shipping_charge' in r && r.shipping_charge != null ? Number(r.shipping_charge) : null) },
 ];
 
 interface ZoneBTableProps {
@@ -65,7 +72,7 @@ export function ZoneBTable({ lineItems, module = 'devis' }: ZoneBTableProps) {
                         {lineItems.length} transactions
                     </span>
                     <ExportButton
-                        rows={sortedData} columns={DETAIL_CSV}
+                        rows={sortedData} columns={module === 'factures' ? INVOICE_CSV : DETAIL_CSV}
                         filename={module === 'factures' ? 'factures_semaine' : 'devis_semaine'}
                         label="CSV" disabled={lineItems.length === 0}
                     />
@@ -144,6 +151,7 @@ export function ZoneBTable({ lineItems, module = 'devis' }: ZoneBTableProps) {
                                     </td>
                                     <td className={cn("px-3 md:px-5 py-2.5 md:py-3.5 text-right font-bold tabular-nums whitespace-nowrap transition-colors", isAvoir ? "text-tone-critical-ink" : "text-ink group-hover:text-primary-press")}>
                                         {formatCurrencyCAD(item.amount)}
+                                        {module === 'factures' && <ShippingNote amount={(item as InvDetailRow).shipping_charge} className="mt-0.5" />}
                                     </td>
                                     <td className="px-3 md:px-5 py-2.5 md:py-3.5 font-mono text-2xs text-ink-mute whitespace-nowrap">{getNumber(item)}</td>
                                     <td className="px-3 md:px-5 py-2.5 md:py-3.5 text-ink-secondary whitespace-nowrap font-medium"><RepName name={item.rep_name} size="sm" /></td>

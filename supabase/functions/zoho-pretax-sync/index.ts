@@ -233,6 +233,8 @@ async function processOrg(
             tax_total: sign * Number(doc.tax_total),
             tax_checked_total: total,
             pretax_error: null,
+            // Shown beside amount on the invoice screens (sales has no column).
+            ...(row.source === 'estimate' ? {} : { shipping_charge: sign * Number(doc.shipping_charge ?? 0) }),
           });
           result.exact++;
         }

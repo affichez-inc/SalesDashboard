@@ -28,6 +28,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { AmountRangeFilter } from '../components/accounts/AmountRangeFilter';
 import { MetaAudienceModal } from '../components/accounts/MetaAudienceModal';
 import { ChannelLogo } from '../components/advertising/ChannelLogo';
+import { ratingLabel, ratingOptions, ratingsInScope } from '../lib/accountRating';
 import { fetchAccountContacts, groupedLines, accountContactColumns } from '../components/accounts/accountContacts';
 import {
     DEFAULT_SPEND_PERIOD, spendPeriod, spendPeriodShort, isSpendFilterActive,
@@ -99,6 +100,12 @@ export default function AccountsDetail() {
     const [selectedRegions, _setSelectedRegions] = useUrlList('region');
     const [selectedInvoiced, _setSelectedInvoiced] = useUrlState('factures', 'Tous');
     const [ratingScope, _setRatingScope] = useUrlState('statut', 'Clients');
+    // Zoho's Rating ("Évaluation"), by stored value. ANDs with Statut above.
+    const [selectedRatings, _setSelectedRatings] = useUrlList('evaluation');
+    const ratings = useMemo(
+        () => ratingsInScope(selectedRatings, ratingScope === 'Tous'),
+        [selectedRatings, ratingScope],
+    );
     // "Montant facturé": both bounds optional, and the period they apply to.
     const [amountMinParam, _setAmountMin] = useUrlState('montant_min', '');
     const [amountMaxParam] = useUrlState('montant_max', '');
@@ -142,6 +149,7 @@ export default function AccountsDetail() {
     const setSelectedRegions = (v: string[]) => _setSelectedRegions(v, toPage1);
     const setSelectedInvoiced = (v: string) => _setSelectedInvoiced(v, toPage1);
     const setRatingScope = (v: string) => _setRatingScope(v, toPage1);
+    const setSelectedRatings = (v: string[]) => _setSelectedRatings(v, toPage1);
 
     const amountRange = useMemo<SpendRange>(() => {
         const num = (s: string) => (s !== '' && Number.isFinite(Number(s)) ? Number(s) : null);
@@ -191,7 +199,7 @@ export default function AccountsDetail() {
         setSearch('');
         _setYearParam('Toutes', {
             month: null, rep: null, source: null, service: null,
-            domaine: null, region: null, factures: null, statut: null, page: null,
+            domaine: null, region: null, factures: null, statut: null, evaluation: null, page: null,
             montant_min: null, montant_max: null, montant_periode: null,
         });
     };
@@ -209,6 +217,7 @@ export default function AccountsDetail() {
         selectedRegions.length > 0,
         selectedInvoiced !== 'Tous',
         ratingScope !== 'Clients',
+        ratings.length > 0,
         amountActive,
     ].filter(Boolean).length;
 
@@ -280,6 +289,7 @@ export default function AccountsDetail() {
         // into NOT (rating IN ...), which is NULL - and therefore false - for the
         // 977 accounts with no rating, silently hiding them.
         if (ratingScope !== 'Tous') query = query.eq('is_internal', false);
+        if (ratings.length > 0) query = query.in('rating', ratings);
         if (selectedServices.length > 0) {
             // overlaps, not contains: match every spelling of every selected service.
             query = query.overlaps('service_interest',
@@ -307,7 +317,7 @@ export default function AccountsDetail() {
         }
         return query;
     }, [dateBounds, repFilter, selectedSources, selectedServices, selectedDomaines,
-        selectedRegions, selectedInvoiced, ratingScope, debouncedSearch, serviceVariants]);
+        selectedRegions, selectedInvoiced, ratingScope, ratings, debouncedSearch, serviceVariants]);
 
     /** How many accounts a draft amount range keeps, with every other filter on. */
     const countForAmount = useCallback(async (draft: SpendRange): Promise<number | null> => {
@@ -615,6 +625,11 @@ export default function AccountsDetail() {
                         ]}
                     />
                 </FilterGroup>
+                <FilterGroup label="Évaluation">
+                    <MultiSelect values={ratings} onChange={setSelectedRatings}
+                                 options={ratingOptions(options?.ratings, ratingScope === 'Tous')}
+                                 allLabel="Toutes les évaluations" className="w-52" />
+                </FilterGroup>
                 <ClearFiltersButton activeCount={activeFilterCount} onClear={clearFilters} />
             </FilterBar>
 
@@ -646,6 +661,7 @@ export default function AccountsDetail() {
                                     <th className="th">Téléphone</th>
                                     <th className="th">Ville</th>
                                     <th className="th">Propriétaire</th>
+                                    <th className="th">Évaluation</th>
                                     <th className="th">Source</th>
                                     <th className="th">Domaine</th>
                                     <th className="th">Service</th>
@@ -694,6 +710,9 @@ export default function AccountsDetail() {
                                             <td className="td whitespace-nowrap text-ink-mute">{formatPhone(a.phone) ?? '—'}</td>
                                             <td className="td text-ink-mute">{a.billing_city ?? '—'}</td>
                                             <td className="td text-ink-mute"><span className="inline-flex items-center gap-2">{a.rep_name ? <RepName name={a.rep_name} size="sm" /> : '—'}</span></td>
+                                            <td className="td text-ink-mute" title={a.rating ? ratingLabel(a.rating).full : undefined}>
+                                                {a.rating ? ratingLabel(a.rating).short : '—'}
+                                            </td>
                                             <td className="td">
                                                 <span className="inline-flex items-center gap-1.5">
                                                     {a.is_bulk_import && (
@@ -878,7 +897,7 @@ const ACCOUNT_CSV: CsvColumn<ZohoAccountRow>[] = [
     { header: 'Liste rachetée',     value: a => a.is_bulk_import },
     { header: 'Domaine',            value: a => a.domaine_activite },
     { header: 'Services',           value: a => (a.service_interest ?? []).join(' | ') },
-    { header: 'Statut CRM',         value: a => a.rating },
+    { header: 'Évaluation',         value: a => (a.rating ? ratingLabel(a.rating).full : null) },
     { header: 'Compte interne',     value: a => a.is_internal },
     { header: 'Compte parent',      value: a => a.parent_account_name },
     { header: 'Créé le',            value: a => a.created_date },

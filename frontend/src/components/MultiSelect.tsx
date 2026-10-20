@@ -219,6 +219,7 @@ export function MultiSelect({
                                     type="button"
                                     role="option"
                                     aria-selected={isSelected}
+                                    title={opt.hint}
                                     onClick={() => toggle(opt.value)}
                                     className={cn(
                                         "w-full flex items-center gap-2.5 px-3 py-2 text-sm transition-colors text-left",

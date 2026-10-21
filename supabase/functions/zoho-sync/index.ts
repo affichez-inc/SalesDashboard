@@ -506,7 +506,12 @@ Deno.serve(async (req: Request) => {
                 quote_date: quoteDate,
                 accepted_date: acceptedDate,
                 client_name: est.customer_name,
-                amount: Math.round((Number(est.total) / 1.14975) * 100) / 100,
+                // Zoho's total, taxes included. The sales_pretax_amount trigger
+                // derives amount as total minus Zoho's tax once zoho-pretax-sync has
+                // read it from the estimate's detail (the list carries no tax), and
+                // falls back to total / 1.14975 until then. amount is left out of
+                // the payload so a re-sync never overwrites an exact figure.
+                total_incl_tax: Number(est.total),
                 quote_number: est.estimate_number,
                 rep_name: (est.salesperson_name as string)?.trim() || null,
                 zoho_department_label: deptLabel ? String(deptLabel) : null,
@@ -528,7 +533,7 @@ Deno.serve(async (req: Request) => {
                 zoho_id: zohoId,
                 sale_date: (est.cf_date_acceptation_unformatted as string) || (est.accepted_date as string) || (est.date as string),
                 client_name: est.customer_name,
-                amount: Math.round((Number(est.total) / 1.14975) * 100) / 100,
+                total_incl_tax: Number(est.total), // amount: see the note above
                 quote_number: est.estimate_number,
                 rep_name: (est.salesperson_name as string)?.trim() || null,
                 zoho_department_label: deptLabel ? String(deptLabel) : null,

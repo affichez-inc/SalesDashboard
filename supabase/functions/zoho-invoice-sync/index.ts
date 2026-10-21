@@ -298,7 +298,12 @@ function invoiceRow(inv: Record<string, unknown>, office: string): Record<string
     // crm_account_id once zoho-books-customer-link has resolved that
     // customer, which is what ties an invoice to a CRM contact.
     books_customer_id: String(inv.customer_id ?? '') || null,
-    amount: Math.round((Number(inv.total) / 1.14975) * 100) / 100,
+    // Not `amount`: a DB trigger derives it as total_incl_tax - tax_total, and
+    // the tax is only on the detail payload (refreshPretax below). Until that
+    // read lands the trigger falls back to total / 1.14975. Leaving amount out
+    // of the payload is also what stops a list re-sync overwriting an exact
+    // figure with an estimate.
+    total_incl_tax: Number(inv.total),
     rep_name: (inv.salesperson_name as string)?.trim() || null,
     // Who keyed the invoice in, which is routinely NOT the salesperson:
     // the first record sampled on 2026-09-07 was created_by "Morgane
@@ -320,6 +325,7 @@ async function syncInvoices(
   accessToken: string,
   lastModified: Date | null,
   touched: Set<string>,
+  changes: OrgChanges,
   statusOverride: string | null = null,
   dateStart: string = DEFAULT_FULL_SYNC_DATE_START,
   dateEnd: string | null = null,
@@ -374,9 +380,11 @@ async function syncInvoices(
 
       const toUpsert: object[] = [];
       for (const inv of invoices) {
+        if (isVoid(inv)) { changes.voided.push(String(inv.invoice_id)); continue; }
         const row = invoiceRow(inv, org.office);
         if (!row) continue;
         touched.add(String(inv.invoice_number));
+        changes.detail.push({ id: String(inv.invoice_id), avoir: false });
         toUpsert.push(row);
       }
 
@@ -389,6 +397,17 @@ async function syncInvoices(
   return { upserted, errors };
 }
 
+/** What a sync pass saw that needs a second step: detail reads and void removals. */
+interface OrgChanges {
+  detail: DetailRef[];
+  voided: string[];
+}
+interface DetailRef { id: string; avoir: boolean }
+
+function isVoid(doc: Record<string, unknown>): boolean {
+  return String(doc.status ?? '').toLowerCase() === 'void';
+}
+
 // ─── Sync Credit Notes ────────────────────────────────────────────────────────
 
 async function syncCreditNotes(
@@ -396,6 +415,7 @@ async function syncCreditNotes(
   accessToken: string,
   lastModified: Date | null,
   touched: Set<string>,
+  changes: OrgChanges,
   dateStart: string = DEFAULT_FULL_SYNC_DATE_START,
   dateEnd: string | null = null,
 ): Promise<{ upserted: number; errors: string[] }> {
@@ -423,69 +443,312 @@ async function syncCreditNotes(
     const notes: Record<string, unknown>[] = data.creditnotes ?? [];
     if (notes.length === 0) break;
 
-    type Pending = {
-      note: Record<string, unknown>;
-      dept: { label: string; mapped: string } | null;
-      createdBy: string | null;
-    };
-    const pending: Pending[] = [];
-    for (const note of notes) {
-      const rawStatus = ((note.status as string) ?? '').toLowerCase();
-      if (rawStatus === 'void') continue;
-      pending.push({ note, dept: extractDept(note), createdBy: null });
-    }
-
-    // Batch-lookup dept for notes that had no inline dept field
-    const needsLookup = pending.filter((p) => p.dept === null);
-    if (needsLookup.length > 0) {
-      const refNums = [...new Set(
-        needsLookup.map((p) => (p.note.reference_number as string)?.trim()).filter(Boolean),
-      )];
-      const deptByInv = await lookupDeptByInvoiceNumber(refNums, org.office);
-      for (const p of needsLookup) {
-        const ref = (p.note.reference_number as string)?.trim();
-        const normalizedRef = ref ? normalizeInvoiceRef(ref) : null;
-        const hit = normalizedRef ? deptByInv.get(normalizedRef) : undefined;
-        if (hit) {
-          p.dept = { label: hit.label, mapped: hit.mapped };
-          p.createdBy = hit.createdBy;
-        }
-      }
-    }
-
-    const toUpsert: object[] = [];
-    for (const { note, dept, createdBy } of pending) {
-      // Same rule as invoices above: land it with a null department rather than
-      // losing it. A credit note is money leaving; dropping one silently
-      // overstates revenue.
-      touched.add(String(note.creditnote_number));
-      toUpsert.push({
-        zoho_id: String(note.creditnote_id),
-        invoice_number: note.creditnote_number,
-        client_name: note.customer_name,
-        books_customer_id: String(note.customer_id ?? '') || null,
-        amount: Math.round((Number(note.total) / 1.14975) * 100) / 100 * -1,
-        rep_name: (note.salesperson_name as string)?.trim() || null,
-        // Zoho sends no creator on a credit note, so this falls back to the
-        // creator of the invoice being refunded, inherited above. Without it the
-        // "Créé par" page shows billing with none of the matching refunds, and
-        // its totals can never agree with the account detail page.
-        created_by_name: (note.created_by as string)?.trim() || createdBy,
-        zoho_department_label: dept?.label ?? rawDeptLabel(note),
-        department: dept?.mapped ?? null,
-        office: org.office,
-        invoice_date: note.date,
-        status: 'avoir',
-        is_avoir: true,
-      });
-    }
-
+    const toUpsert = await creditNoteRows(notes, org.office, touched, changes);
     if (toUpsert.length > 0) { await upsertBatch(toUpsert); upserted += toUpsert.length; }
     hasMore = (data.page_context as Record<string, boolean>)?.has_more_page ?? false;
     page++;
   }
 
   return { upserted, errors };
+}
+
+/**
+ * The rows stored for one page of credit notes. A voided note is not a row: it
+ * goes to changes.voided so an existing row is removed — it used to be skipped,
+ * which left the refund counted for ever (CN-01137/38, -$220, voided in March).
+ */
+async function creditNoteRows(
+  notes: Record<string, unknown>[],
+  office: string,
+  touched: Set<string>,
+  changes: OrgChanges,
+): Promise<object[]> {
+  type Pending = {
+    note: Record<string, unknown>;
+    dept: { label: string; mapped: string } | null;
+    createdBy: string | null;
+  };
+
+  const pending: Pending[] = [];
+  for (const note of notes) {
+    if (isVoid(note)) { changes.voided.push(String(note.creditnote_id)); continue; }
+    pending.push({ note, dept: extractDept(note), createdBy: null });
+  }
+
+  // Batch-lookup dept for notes that had no inline dept field
+  const needsLookup = pending.filter((p) => p.dept === null);
+  if (needsLookup.length > 0) {
+    const refNums = [...new Set(
+      needsLookup.map((p) => (p.note.reference_number as string)?.trim()).filter(Boolean),
+    )];
+    const deptByInv = await lookupDeptByInvoiceNumber(refNums, office);
+    for (const p of needsLookup) {
+      const ref = (p.note.reference_number as string)?.trim();
+      const normalizedRef = ref ? normalizeInvoiceRef(ref) : null;
+      const hit = normalizedRef ? deptByInv.get(normalizedRef) : undefined;
+      if (hit) {
+        p.dept = { label: hit.label, mapped: hit.mapped };
+        p.createdBy = hit.createdBy;
+      }
+    }
+  }
+
+  const toUpsert: object[] = [];
+  for (const { note, dept, createdBy } of pending) {
+    // Same rule as invoices above: land it with a null department rather than
+    // losing it. A credit note is money leaving; dropping one silently
+    // overstates revenue.
+    touched.add(String(note.creditnote_number));
+    changes.detail.push({ id: String(note.creditnote_id), avoir: true });
+    toUpsert.push({
+      zoho_id: String(note.creditnote_id),
+      invoice_number: note.creditnote_number,
+      client_name: note.customer_name,
+      books_customer_id: String(note.customer_id ?? '') || null,
+      // Negative, like amount: a credit note is money leaving.
+      total_incl_tax: -Number(note.total),
+      rep_name: (note.salesperson_name as string)?.trim() || null,
+      // Zoho sends no creator on a credit note, so this falls back to the
+      // creator of the invoice being refunded, inherited above. Without it the
+      // "Créé par" page shows billing with none of the matching refunds, and
+      // its totals can never agree with the account detail page.
+      created_by_name: (note.created_by as string)?.trim() || createdBy,
+      zoho_department_label: dept?.label ?? rawDeptLabel(note),
+      department: dept?.mapped ?? null,
+      office,
+      invoice_date: note.date,
+      status: 'avoir',
+      is_avoir: true,
+    });
+  }
+
+  return toUpsert;
+}
+
+// ─── Exact pre-tax amount ─────────────────────────────────────────────────────
+// Zoho's list payload has the total but not the tax; only the detail payload has
+// tax_total. Every document this run wrote is read once in detail so its amount
+// is exact within the same run rather than an estimate until the back-fill
+// (zoho-pretax-sync) reaches it. A handful per run on the incremental path.
+
+/** Detail reads per org per run here; anything beyond waits for zoho-pretax-sync. */
+const PRETAX_DETAIL_MAX = 40;
+
+async function patchInvoice(zohoId: string, patch: Record<string, unknown>): Promise<void> {
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/invoices?zoho_id=eq.${encodeURIComponent(zohoId)}`, {
+    method: 'PATCH',
+    headers: SB_HEADERS,
+    body: JSON.stringify(patch),
+  });
+  if (!res.ok) throw new Error('Supabase pre-tax update failed: ' + await res.text());
+}
+
+async function refreshPretax(
+  org: { id: string; office: string },
+  accessToken: string,
+  refs: DetailRef[],
+  deadline: number,
+): Promise<{ read: number; errors: string[] }> {
+  const errors: string[] = [];
+  const seen = new Set<string>();
+  let read = 0;
+  for (const ref of refs) {
+    if (seen.has(ref.id)) continue;
+    seen.add(ref.id);
+    if (read >= PRETAX_DETAIL_MAX || Date.now() > deadline) break;
+    read++;
+    const module = ref.avoir ? 'creditnotes' : 'invoices';
+    const res = await fetch(
+      `https://www.zohoapis.com/books/v3/${module}/${ref.id}?organization_id=${org.id}`,
+      { headers: { Authorization: `Bearer ${accessToken}` } },
+    );
+    if (!res.ok) {
+      errors.push(`${org.office} pretax ${module}/${ref.id}: HTTP ${res.status}`);
+      await res.body?.cancel();
+      continue;
+    }
+    const body = await res.json();
+    const doc = (ref.avoir ? body.creditnote : body.invoice) as Record<string, unknown> | undefined;
+    if (!doc || doc.total === undefined || doc.tax_total === undefined) {
+      errors.push(`${org.office} pretax ${module}/${ref.id}: no total/tax_total in payload`);
+      continue;
+    }
+    const sign = ref.avoir ? -1 : 1;
+    const total = sign * Number(doc.total);
+    await patchInvoice(ref.id, {
+      total_incl_tax: total,
+      tax_total: sign * Number(doc.tax_total),
+      tax_checked_total: total,
+      shipping_charge: sign * Number(doc.shipping_charge ?? 0),
+    });
+  }
+  return { read, errors };
+}
+
+/** Rows for documents Zoho reports as void. A void document is not a sale, and
+ *  the RPCs do not all filter status, so the row goes rather than being relabelled. */
+async function removeVoided(ids: string[]): Promise<number> {
+  const unique = [...new Set(ids)];
+  if (unique.length > 0) await deleteBatch(unique);
+  return unique.length;
+}
+
+// ─── Reconcile against Zoho ───────────────────────────────────────────────────
+// The incremental sync only ever sees what Zoho reports as modified, and nothing
+// reports a deletion. Audited 2026-10-19: 28 documents dated 2026 had been
+// deleted in Zoho and were still counted here (MTL-002188 $1,150, CN-00276
+// -$2,095, ...), and 5 voided ones too. Once an hour this lists every document
+// from January of last year onwards, rewrites any row that disagrees with Zoho,
+// and removes rows Zoho no longer has — each removal confirmed one by one, never
+// inferred from a list that might be incomplete.
+
+const RECONCILE_KEY = 'invoices_reconcile';
+/** More disappearances than this in one pass is not a deletion, it is a fault. */
+const RECONCILE_MAX_REMOVALS = 50;
+
+interface StoredRow {
+  zoho_id: string;
+  is_avoir: boolean;
+  status: string;
+  total_incl_tax: string | number | null;
+  rep_name: string | null;
+  invoice_date: string | null;
+}
+
+async function storedRowsSince(office: string, since: string): Promise<StoredRow[]> {
+  const rows: StoredRow[] = [];
+  for (let offset = 0; ; offset += 1000) {
+    const res = await fetch(
+      `${SUPABASE_URL}/rest/v1/invoices?select=zoho_id,is_avoir,status,total_incl_tax,rep_name,invoice_date` +
+        `&office=eq.${office}&invoice_date=gte.${since}&order=zoho_id.asc&limit=1000&offset=${offset}`,
+      { headers: SB_HEADERS },
+    );
+    if (!res.ok) throw new Error('Reconcile scan failed: ' + await res.text());
+    const page = await res.json() as StoredRow[];
+    rows.push(...page);
+    if (page.length < 1000) return rows;
+  }
+}
+
+/** 'deleted' only on an unambiguous answer from Zoho; 'void' when Zoho says so. */
+async function zohoFate(
+  org: { id: string; office: string },
+  accessToken: string,
+  row: StoredRow,
+): Promise<'deleted' | 'void' | 'exists' | 'unknown'> {
+  const module = row.is_avoir ? 'creditnotes' : 'invoices';
+  const res = await fetch(
+    `https://www.zohoapis.com/books/v3/${module}/${row.zoho_id}?organization_id=${org.id}`,
+    { headers: { Authorization: `Bearer ${accessToken}` } },
+  );
+  if (res.ok) {
+    const body = await res.json();
+    const doc = (row.is_avoir ? body.creditnote : body.invoice) as Record<string, unknown> | undefined;
+    return doc && isVoid(doc) ? 'void' : 'exists';
+  }
+  let code: number | null = null;
+  try { code = Number((await res.json())?.code ?? NaN); } catch { /* non-JSON error body */ }
+  if (res.status === 404 || code === 1002) return 'deleted';
+  return 'unknown';
+}
+
+async function reconcileWindow(
+  org: { id: string; office: string },
+  accessToken: string,
+  since: string,
+  touched: Set<string>,
+  changes: OrgChanges,
+): Promise<{ complete: boolean; rewritten: number; removed: string[]; errors: string[] }> {
+  const errors: string[] = [];
+  const listed = new Map<string, { doc: Record<string, unknown>; avoir: boolean }>();
+
+  for (const avoir of [false, true]) {
+    const module = avoir ? 'creditnotes' : 'invoices';
+    for (let page = 1; ; page++) {
+      const response = await fetch(
+        `https://www.zohoapis.com/books/v3/${module}?organization_id=${org.id}` +
+          `&page=${page}&per_page=200${dateRangeParam(since, null)}`,
+        { headers: { Authorization: `Bearer ${accessToken}` } },
+      );
+      if (!response.ok) {
+        // An incomplete list would make every unlisted row look deleted.
+        errors.push(`${org.office} reconcile ${module} p.${page}: ${await response.text()}`);
+        return { complete: false, rewritten: 0, removed: [], errors };
+      }
+      const data = await response.json();
+      for (const doc of (data[module] ?? []) as Record<string, unknown>[]) {
+        listed.set(String(avoir ? doc.creditnote_id : doc.invoice_id), { doc, avoir });
+      }
+      if (!(data.page_context as Record<string, boolean>)?.has_more_page) break;
+    }
+  }
+
+  const stored = await storedRowsSince(org.office, since);
+  const storedById = new Map(stored.map((r) => [r.zoho_id, r]));
+
+  // Rewrite what disagrees. A row whose only difference is a missing
+  // total_incl_tax (every row from before the pre-tax change) is rewritten too,
+  // so the back-fill queue sees its total; its detail read is left to
+  // zoho-pretax-sync rather than queued here.
+  const invoiceDocs: Record<string, unknown>[] = [];
+  const noteDocs: Record<string, unknown>[] = [];
+  for (const [id, { doc, avoir }] of listed) {
+    if (isVoid(doc)) {
+      if (storedById.has(id)) changes.voided.push(id);
+      continue;
+    }
+    const row = storedById.get(id);
+    const total = (avoir ? -1 : 1) * Number(doc.total);
+    const status = avoir
+      ? 'avoir'
+      : STATUS_MAP[String(doc.status ?? '').toLowerCase().replace(/_/g, '')];
+    if (!avoir && !status) continue; // draft etc.: not a row the table keeps
+    const storedTotal = row?.total_incl_tax === null || row?.total_incl_tax === undefined
+      ? null : Number(row.total_incl_tax);
+    const moved = !row || row.status !== status || (storedTotal !== null && storedTotal !== total) ||
+      (row.rep_name ?? '') !== (String(doc.salesperson_name ?? '').trim()) ||
+      row.invoice_date !== doc.date;
+    if (!moved && storedTotal !== null) continue;
+    if (moved) changes.detail.push({ id, avoir });
+    (avoir ? noteDocs : invoiceDocs).push(doc);
+  }
+
+  const rows: object[] = [];
+  for (const doc of invoiceDocs) {
+    const row = invoiceRow(doc, org.office);
+    if (row) { rows.push(row); touched.add(String(doc.invoice_number)); }
+  }
+  for (let i = 0; i < noteDocs.length; i += 200) {
+    rows.push(...await creditNoteRows(noteDocs.slice(i, i + 200), org.office, touched, { detail: [], voided: [] }));
+  }
+  for (let i = 0; i < rows.length; i += 200) await upsertBatch(rows.slice(i, i + 200));
+
+  // Remove what Zoho no longer has, one confirmed answer at a time.
+  const removed: string[] = [];
+  const missing = stored.filter((r) => !listed.has(r.zoho_id));
+  if (missing.length > RECONCILE_MAX_REMOVALS) {
+    errors.push(`${org.office} reconcile: ${missing.length} stored rows absent from Zoho's list ` +
+      `(limit ${RECONCILE_MAX_REMOVALS}) — nothing removed, investigate`);
+  } else {
+    for (const row of missing) {
+      const fate = await zohoFate(org, accessToken, row);
+      if (fate === 'deleted' || fate === 'void') {
+        await deleteBatch([row.zoho_id]);
+        removed.push(`${row.zoho_id} (${fate}, ${row.invoice_date})`);
+      } else if (fate === 'unknown') {
+        errors.push(`${org.office} reconcile ${row.zoho_id}: Zoho answer inconclusive — kept`);
+      }
+      // 'exists': its date moved out of the window; the incremental path owns it.
+    }
+  }
+
+  return { complete: true, rewritten: rows.length, removed, errors };
+}
+
+/** 1 January of last year, on Montreal's calendar. */
+function reconcileSince(): string {
+  const year = Number(new Date().toLocaleString('en-CA', { timeZone: 'America/Toronto', year: 'numeric' }));
+  return `${year - 1}-01-01`;
 }
 
 // ─── Overdue Status ───────────────────────────────────────────────────────────
@@ -733,7 +996,7 @@ Deno.serve(async (req: Request) => {
     'Access-Control-Allow-Origin': '*',
     'Access-Control-Allow-Headers':
       'authorization, x-sync-source, x-full-sync, x-org, x-status, x-date-start, x-probe, ' +
-      'x-date-end, x-prune, x-prune-only, x-dry-run, x-overdue-check, content-type',
+      'x-date-end, x-prune, x-prune-only, x-dry-run, x-overdue-check, x-reconcile, content-type',
   };
   if (req.method === 'OPTIONS') return new Response(null, { headers: corsHeaders });
 
@@ -892,16 +1155,61 @@ Deno.serve(async (req: Request) => {
     const lastModified = isFullSync ? null : await readSyncState('invoices');
 
     const touched = new Set<string>();
+    // Detail reads stop here so a run always finishes inside the 150s limit.
+    const deadline = startTime + 100_000;
 
+    // ── x-reconcile: the hourly comparison with Zoho, its own cron invocation ──
+    // Listing ~9,000 documents does not belong inside the 5-minute sync, so a
+    // separate job per office calls this. x-sync-source still marks cron runs.
+    if (req.headers.get('x-reconcile') === 'true') {
+      const since = reconcileSince();
+      const summary: Record<string, unknown>[] = [];
+      for (const org of orgsToProcess) {
+        const changes: OrgChanges = { detail: [], voided: [] };
+        const r = await reconcileWindow(org, accessToken, since, touched, changes);
+        const voided = await removeVoided(changes.voided);
+        const pre = await refreshPretax(org, accessToken, changes.detail, deadline);
+        allErrors.push(...r.errors, ...pre.errors);
+        summary.push({
+          office: org.office, complete: r.complete, rewritten: r.rewritten,
+          removed: r.removed, voided_removed: voided, pretax_read: pre.read,
+        });
+      }
+      if (!orgFilter) await writeSyncState(RECONCILE_KEY, new Date(startTime));
+      const removedNotes = summary.flatMap((s) => (s.removed as string[]).map((x) => `${s.office} removed ${x}`));
+      await logSync('reconcile_invoices', allErrors.length ? 500 : 200,
+        [...removedNotes, ...allErrors].join(' | ') || undefined);
+      return new Response(JSON.stringify({ since, summary, errors: allErrors, duration_ms: Date.now() - startTime }), {
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
+    }
+
+    let pretaxRead = 0;
+    let voidedRemoved = 0;
     if (!isPruneOnly) {
       for (const org of orgsToProcess) {
-        const invResult = await syncInvoices(org, accessToken, lastModified, touched, statusOverride, dateStart, dateEnd);
+        const changes: OrgChanges = { detail: [], voided: [] };
+        const invResult = await syncInvoices(org, accessToken, lastModified, touched, changes, statusOverride, dateStart, dateEnd);
         totalUpserted += invResult.upserted;
         allErrors.push(...invResult.errors);
 
-        const cnResult = await syncCreditNotes(org, accessToken, lastModified, touched, dateStart, dateEnd);
+        const cnResult = await syncCreditNotes(org, accessToken, lastModified, touched, changes, dateStart, dateEnd);
         totalUpserted += cnResult.upserted;
         allErrors.push(...cnResult.errors);
+
+        // Isolated: a failed void removal or detail read must not fail the sync.
+        try {
+          voidedRemoved += await removeVoided(changes.voided);
+          // A full sync touches thousands of rows; those are zoho-pretax-sync's
+          // job. Here only what the incremental run just changed.
+          if (!isFullSync) {
+            const pre = await refreshPretax(org, accessToken, changes.detail, deadline);
+            pretaxRead += pre.read;
+            allErrors.push(...pre.errors);
+          }
+        } catch (err) {
+          allErrors.push('pretax/void: ' + (err instanceof Error ? err.message : String(err)));
+        }
       }
 
       // Overdue pass, isolated like the reaper below: its failure must not fail
@@ -948,6 +1256,8 @@ Deno.serve(async (req: Request) => {
     const durationMs = Date.now() - startTime;
     const result = {
       upserted: totalUpserted,
+      pretax_read: pretaxRead,
+      voided_removed: voidedRemoved,
       overdue_checked: overdue.checked,
       overdue_marked: overdue.marked,
       overdue_cleared: overdue.cleared,

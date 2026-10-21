@@ -7,13 +7,25 @@
 //     → starts a generation in the background and answers at once; the widget
 //       polls "get" until it is done. A second request for the same account
 //       joins the one already running.
+//   POST { action: "quote_decline", account_id, summary_id, step, user }
+//     → the widget's "Marquer refusé" on a decline_quote step: marks the quote
+//       declined in Zoho Books and comments who did it and why. Task steps are
+//       applied by the widget itself, as the user.
 //   POST { action: "nightly", date?, dry_run?, limit?, wait? }
 //     → pg_cron at 1 AM Montreal: lists the accounts with activity since the
-//       previous run and queues a summary for each (activity.ts). `dry_run`
-//       returns what was found and writes nothing.
+//       previous run, and those whose card went stale by date (refresh_at), and
+//       queues a summary for each (activity.ts). `dry_run` returns what was found
+//       and writes nothing.
 //   POST { action: "work", wait? }
 //     → pg_cron every minute while the queue holds work: claims queued
 //       summaries one at a time and generates them.
+//   POST { action: "push_crm", limit? }
+//     → copies the latest cards not yet on their Zoho account (crm.ts); also
+//       run at the end of each nightly detection.
+//
+// Every finished summary is copied onto the account's custom fields in Zoho
+// (temperature, its reason, the first next step, open quotes, overdue), so
+// list views can filter on them.
 //
 // Who may call it: the Zoho widget, through a Zoho Connection that adds the
 // x-summary-key header (SUMMARY_API_KEY), and pg_cron, which reads the same key
@@ -25,18 +37,22 @@
 //   OPENROUTER_API_KEY          the model, through OpenRouter (openrouter.ts)
 //   SUMMARY_MODEL / SUMMARY_EFFORT / SUMMARY_PROVIDERS   see openrouter.ts
 //   SUMMARY_NIGHTLY_LIMIT       accounts queued per night at most, default 1500
+//   SUMMARY_CRM_FIELDS          "off" stops the copy onto the Zoho account's fields
 //   ZOHO_SUMMARY_REFRESH_TOKEN  CRM token with notes, emails, events and COQL
-//                               read; falls back to ZOHO_CRM_REFRESH_TOKEN
+//                               read, Accounts update and Books estimates
+//                               create/update; reads fall back to
+//                               ZOHO_CRM_REFRESH_TOKEN, writes require it
 //   ZOHO_SUMMARY_CLIENT_ID / _SECRET  fall back to ZOHO_CRM_CLIENT_* then ZOHO_CLIENT_*
 //   ZOHO_CLIENT_ID / _SECRET / ZOHO_REFRESH_TOKEN  the Books token the syncs use
 
-import { detectActivity } from './activity.ts';
-import { dropCurrentYear } from './clean.ts';
-import { type Db, gatherDossier, WINDOW_MONTHS } from './gather.ts';
+import { type AccountActivity, detectActivity } from './activity.ts';
+import { buildCard, type NextStep } from './card.ts';
+import { type CardFields, writeAccountFields } from './crm.ts';
+import { type Db, gatherDossier } from './gather.ts';
 import { summarize } from './model.ts';
 import { type CallRecord, ModelCallError } from './openrouter.ts';
-import { buildPrompt, day, settleTemperature, SYSTEM_PROMPT, userMessage } from './prompt.ts';
-import { SB_HEADERS } from './zoho.ts';
+import { buildPrompt, day, OPEN_QUOTE, SYSTEM_PROMPT, userMessage } from './prompt.ts';
+import { booksGet, booksWrite, BOOKS_ORG_IDS, mapLimit, SB_HEADERS, ZohoError } from './zoho.ts';
 
 declare const EdgeRuntime: { waitUntil(p: Promise<unknown>): void } | undefined;
 
@@ -50,9 +66,6 @@ const API_KEY = Deno.env.get('SUMMARY_API_KEY') ?? '';
 const STALE_MS = 7 * 60 * 1000;
 /** Every model attempt must have ended by then, counted from the request. */
 const WALL_MS = 380_000;
-const MAX_DUE_DAYS = 60;
-const MAX_STEPS = 3;
-const MAX_POINTS = 5;
 
 const NIGHTLY_LIMIT = Math.max(1, Number(Deno.env.get('SUMMARY_NIGHTLY_LIMIT')) || 1500);
 /** Nightly generations running at once, across workers (Zoho allows 20 concurrent calls per org). */
@@ -66,6 +79,11 @@ const RETRY_DELAY_MS = [10 * 60_000, 30 * 60_000];
 /** An account created after the last zoho-account-sync is in the mirror within 2 h. */
 const MISSING_ACCOUNT_DELAY_MS = 2 * 60 * 60_000;
 const MISSING_ACCOUNT = 'Compte introuvable dans le miroir Supabase.';
+/** SUMMARY_CRM_FIELDS=off stops the copy onto Zoho accounts; the cards wait in push_crm's backlog. */
+const CRM_FIELDS_ON = Deno.env.get('SUMMARY_CRM_FIELDS') !== 'off';
+/** Cards copied onto Zoho accounts per push_crm call, a few at a time. */
+const CRM_PUSH_LIMIT = 200;
+const CRM_PUSH_CONCURRENCY = 3;
 
 const CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
@@ -167,6 +185,45 @@ async function recordCalls(row: SummaryRow, calls: CallRecord[]): Promise<void> 
   if (!res.ok) console.error('account-summary: cost record failed', row.id, res.status, await res.text());
 }
 
+// ─── Zoho account fields ──────────────────────────────────────────────────────
+
+async function patchRow(id: number, patch: Record<string, unknown>): Promise<void> {
+  const res = await fetch(`${TABLE}?id=eq.${id}`, { method: 'PATCH', headers: SB_HEADERS, body: JSON.stringify(patch) });
+  if (!res.ok) console.error('account-summary: update failed', id, res.status, await res.text());
+}
+
+/**
+ * Copies a card onto its Zoho account while it is the account's latest summary;
+ * a superseded card leaves the fields to the newer one. Never throws: a failure
+ * is stored on the row and push_crm retries it.
+ */
+async function pushCrm(id: number, accountId: string, card: CardFields, writtenAt: string): Promise<boolean> {
+  if (!CRM_FIELDS_ON) return false;
+  try {
+    const [latest] = await readRows(accountId, 'status=eq.done', 'id');
+    if (latest?.id !== id) return false;
+    await writeAccountFields(accountId, card, writtenAt);
+    await patchRow(id, { crm_pushed_at: new Date().toISOString(), crm_error: null });
+    return true;
+  } catch (err) {
+    const message = (err instanceof Error ? err.message : String(err)).slice(0, 500);
+    console.error('account-summary: Zoho account fields not written', accountId, message);
+    await patchRow(id, { crm_error: message });
+    return false;
+  }
+}
+
+/** The latest cards not yet copied onto their account: new ones, failed ones, older summaries. */
+async function pushPending(limit: number) {
+  const rows = await rpc<Array<{ id: number; zoho_account_id: string; result: CardFields; completed_at: string | null; created_at: string }>>(
+    'account_ai_summary_crm_pending', { p_limit: limit },
+  );
+  const ok = await mapLimit(rows, CRM_PUSH_CONCURRENCY, (r) => pushCrm(r.id, r.zoho_account_id, r.result, r.completed_at ?? r.created_at));
+  const pushed = ok.filter(Boolean).length;
+  if (rows.length) console.log('account-summary: Zoho account fields', pushed, 'of', rows.length);
+  return { pending: rows.length, pushed, failed: rows.length - pushed };
+}
+
 /**
  * The newest row by the moment its data was read: a nightly row is created when
  * it is queued, which can be hours before it runs.
@@ -256,44 +313,58 @@ async function startGeneration(accountId: string, user: Requester, deadline: num
   return await getState(accountId);
 }
 
-// ─── Generation ───────────────────────────────────────────────────────────────
-
-/** A person's name compared without case, accents or extra spaces. */
-function nameKey(name: string): string {
-  return name.normalize('NFD').replace(/\p{Diacritic}/gu, '').toLowerCase().replace(/\s+/g, ' ').trim();
-}
-
-/** A number written the French or the English way: "1 010,11", "1,010.11", "1010.11". */
-const NUMBER = /\d{1,3}(?:\s\d{3})+(?:,\d{1,2})?|\d+(?:[.,]\d+)*/g;
-
-function parseNumber(token: string): number {
-  const raw = token.replace(/\s/g, '');
-  const last = Math.max(raw.lastIndexOf(','), raw.lastIndexOf('.'));
-  if (last < 0) return Number(raw);
-  return raw.length - last - 1 <= 2
-    ? Number(`${raw.slice(0, last).replace(/[.,]/g, '')}.${raw.slice(last + 1)}`)
-    : Number(raw.replace(/[.,]/g, ''));
-}
+const QUOTE_STATUS_LABEL: Record<string, string> = {
+  draft: 'brouillon', sent: 'envoyé', viewed: 'vu', accepted: 'accepté', invoiced: 'facturé',
+  partially_invoiced: 'partiellement facturé', declined: 'refusé', expired: 'expiré',
+};
 
 /**
- * Dollar amounts the model wrote that appear nowhere in the dossier, to within
- * a dollar of rounding. Stored with the card for review, never shown on it.
+ * Marks the quote of a decline_quote step declined in Books, once its current
+ * status is checked, and leaves a comment (hidden from the client) naming who
+ * did it from the card and why. The step is read from the stored card, never
+ * from the request.
  */
-function unverifiedAmounts(written: string[], dossier: string): number[] {
-  const known = [...dossier.matchAll(NUMBER)].map((m) => parseNumber(m[0])).filter(Number.isFinite);
-  const amounts = written.flatMap((t) => [...t.matchAll(/(\d{1,3}(?:\s\d{3})+(?:,\d{1,2})?|\d+(?:[.,]\d+)*)\s?\$/g)])
-    .map((m) => parseNumber(m[1])).filter(Number.isFinite);
-  return [...new Set(amounts)].filter((n) => !known.some((k) => Math.abs(k - n) <= 1));
+async function declineQuote(accountId: string, summaryId: number, stepIndex: number, user: Requester) {
+  const res = await fetch(
+    `${TABLE}?id=eq.${summaryId}&zoho_account_id=eq.${accountId}&status=eq.done&select=result`,
+    { headers: SB_HEADERS },
+  );
+  if (!res.ok) throw new Error(`Lecture du résumé impossible : ${res.status}`);
+  const [row] = await res.json() as Array<{ result: { next_steps?: NextStep[] } }>;
+  const step = row?.result?.next_steps?.[stepIndex];
+  const target = step?.action === 'decline_quote' && step.target?.kind === 'quote' ? step.target : null;
+  const orgId = target ? BOOKS_ORG_IDS[target.office] : undefined;
+  if (!target || !orgId) return { ok: false, error: 'Action introuvable sur ce résumé : régénérez-le.' };
+
+  const current = await booksGet<{ estimate?: { status?: string } }>(`estimates/${target.record_id}`, orgId);
+  const status = current?.estimate?.status ?? '';
+  if (status === 'declined') return { ok: true, status, already: true };
+  if (!OPEN_QUOTE.has(status)) {
+    return { ok: false, status, error: `Le devis ${target.number} est maintenant « ${QUOTE_STATUS_LABEL[status] ?? status} » dans Zoho Books : rien n'a été changé.` };
+  }
+
+  try {
+    await booksWrite('POST', `estimates/${target.record_id}/status/declined`, orgId);
+  } catch (err) {
+    if (err instanceof ZohoError && err.status === 401) {
+      return { ok: false, error: "La clé Zoho du résumé n'a pas le droit de modifier les devis dans Zoho Books." };
+    }
+    throw err;
+  }
+  const who = user.name?.slice(0, 120) || 'un représentant';
+  try {
+    await booksWrite('POST', `estimates/${target.record_id}/comments`, orgId, {
+      description: `Marqué refusé par ${who} depuis le résumé IA du compte (Zoho CRM). Motif : ${step?.reason ?? ''}`.slice(0, 2000),
+      show_comment_to_clients: false,
+    });
+  } catch (err) {
+    console.error('account-summary: quote comment not added', target.number, err instanceof Error ? err.message : err);
+  }
+  console.log('account-summary: quote declined', accountId, target.number, 'by', who);
+  return { ok: true, status: 'declined' };
 }
 
-function dueDate(daysFromNow: number): string {
-  const d = new Date(Date.now() + Math.max(0, Math.round(daysFromNow)) * 86_400_000);
-  // Weekend → next Monday.
-  const dow = new Date(day(d.toISOString()) + 'T12:00:00Z').getUTCDay();
-  if (dow === 6) d.setUTCDate(d.getUTCDate() + 2);
-  if (dow === 0) d.setUTCDate(d.getUTCDate() + 1);
-  return day(d.toISOString());
-}
+// ─── Generation ───────────────────────────────────────────────────────────────
 
 type Outcome = 'done' | 'failed' | 'requeued';
 
@@ -307,63 +378,10 @@ async function runGeneration(row: SummaryRow, deadline: number): Promise<Outcome
     const out = await summarize(SYSTEM_PROMPT, userMessage(built, dossier.account.account_name), deadline);
     calls = out.calls;
 
-    const year = day(new Date().toISOString()).slice(0, 4);
-    const tidy = (s: string) => dropCurrentYear(s, year);
-    // Keep only citations that exist; map next-step contacts to their CRM ids.
-    const cite = (ids: string[]) => [...new Set(ids.map((s) => s.replace(/[[\]\s]/g, '')))].filter((s) => s in built.sources);
-    const byName = new Map(built.contacts.map((c) => [nameKey(c.name), c]));
-    const keyPoints = out.summary.key_points.slice(0, MAX_POINTS).map((p) => ({ text: tidy(p.text), tone: p.tone, sources: cite(p.sources) }));
-    const nextSteps = out.summary.next_steps.slice(0, MAX_STEPS).map((s) => {
-      const contact = s.contact_name ? byName.get(nameKey(s.contact_name)) ?? null : null;
-      const dueIn = Math.min(MAX_DUE_DAYS, Math.max(0, Math.round(s.due_in_days)));
-      return {
-        title: tidy(s.title).slice(0, 120),
-        due_in_days: dueIn,
-        due_date: dueDate(dueIn),
-        contact_id: contact?.id ?? null,
-        contact_name: contact?.name ?? null,
-        sources: cite(s.sources),
-      };
-    });
-    // The figures set the temperature; the model may only raise it on cited evidence.
-    const temp = settleTemperature(built.base, out.summary.temperature, tidy(out.summary.temperature_reason), cite(out.summary.temperature_sources));
-    if (temp.adjusted) console.warn('account-summary: temperature reset to base', accountId, out.summary.temperature, '->', temp.temperature);
-    const summary = tidy(out.summary.summary);
-    const cited = new Set([...keyPoints, ...nextSteps, temp].flatMap((x) => x.sources));
-    const sources = Object.fromEntries(Object.entries(built.sources).filter(([id]) => cited.has(id)));
-    const unverified = unverifiedAmounts(
-      [summary, temp.reason, ...keyPoints.map((p) => p.text), ...nextSteps.map((s) => s.title)],
-      built.text,
-    );
-    if (unverified.length) console.warn('account-summary: amounts not found in the dossier', accountId, unverified);
-
-    const result = {
-      version: 1,
-      account: {
-        id: accountId,
-        name: dossier.account.account_name,
-        rep_name: dossier.account.rep_name,
-      },
-      temperature: temp.temperature,
-      temperature_reason: temp.reason,
-      temperature_sources: temp.sources,
-      temperature_base: built.base,
-      summary,
-      key_points: keyPoints,
-      next_steps: nextSteps,
-      stats: built.stats,
-      basis: built.basis,
-      sources,
-      window_months: WINDOW_MONTHS,
-      warnings: dossier.warnings,
-      checks: {
-        unverified_amounts: unverified,
-        temperature: { base: built.base.temperature, model: out.summary.temperature, adjusted: temp.adjusted },
-      },
-      duration_ms: Date.now() - started,
-    };
+    const { result, refresh_at } = buildCard(accountId, dossier, built, out.summary, started);
 
     await recordCalls(row, calls);
+    const completedAt = new Date().toISOString();
     await finishRow(row.id, {
       status: 'done',
       model: out.model,
@@ -371,8 +389,10 @@ async function runGeneration(row: SummaryRow, deadline: number): Promise<Outcome
       input_tokens: calls.reduce((s, c) => s + (c.prompt_tokens ?? 0), 0),
       output_tokens: calls.reduce((s, c) => s + (c.completion_tokens ?? 0), 0),
       error: null,
-      completed_at: new Date().toISOString(),
+      completed_at: completedAt,
+      refresh_at,
     });
+    await pushCrm(row.id, accountId, result, completedAt);
     return 'done';
   } catch (err) {
     if (err instanceof ModelCallError) calls = err.calls;
@@ -407,23 +427,53 @@ function montrealToday(): string {
 
 interface RunWindow { run_id?: number; window_start: string; window_end: string; started?: boolean; status?: string }
 
+/**
+ * The accounts with activity, plus those whose latest card went stale by date
+ * before the window's end (refresh_at). A stale card is queued even when it
+ * already covers the account's activity: it started before its refresh day.
+ */
+async function withExpired(found: AccountActivity[], windowEnd: string): Promise<{ accounts: AccountActivity[]; expired: number }> {
+  const rows = await rpc<Array<{ account_id: string; refresh_at: string }>>('account_ai_summary_expired', { p_until: windowEnd });
+  const byId = new Map(found.map((a) => [a.account_id, a]));
+  for (const r of rows) {
+    const refresh = new Date(r.refresh_at).toISOString();
+    const a = byId.get(r.account_id);
+    if (a) {
+      a.activity.kinds.temperature_expired = 1;
+      if (Date.parse(refresh) > Date.parse(a.ready_at)) a.ready_at = refresh;
+    } else {
+      byId.set(r.account_id, {
+        account_id: r.account_id,
+        last_activity_at: refresh,
+        ready_at: refresh,
+        activity: { kinds: { temperature_expired: 1 } },
+      });
+    }
+  }
+  return { accounts: [...byId.values()], expired: rows.length };
+}
+
 async function detectAndQueue(run: RunWindow, limit: number) {
   const from = Date.parse(run.window_start);
   const to = Date.parse(run.window_end);
   try {
     const found = await detectActivity(db, from, to);
+    const { accounts, expired } = await withExpired(found.accounts, run.window_end);
+    const detection = { ...found.stats, expired };
     const counts = await rpc<Record<string, number>>('account_ai_summary_enqueue', {
       p_run_id: run.run_id,
-      p_items: found.accounts,
+      p_items: accounts,
       p_limit: limit,
     });
     await fetch(`${REST}/account_ai_summary_runs?id=eq.${run.run_id}`, {
       method: 'PATCH',
       headers: SB_HEADERS,
-      body: JSON.stringify({ detection: found.stats }),
+      body: JSON.stringify({ detection }),
     });
     console.log('account-summary: nightly run queued', run.run_id, JSON.stringify(counts));
-    return { run_id: run.run_id, window: found.stats.window, ...counts, detection: found.stats };
+    // Cards whose copy onto the Zoho account failed get another try.
+    const crm = await pushPending(CRM_PUSH_LIMIT).catch((err) => ({ error: err instanceof Error ? err.message : String(err) }));
+    return { run_id: run.run_id, window: found.stats.window, ...counts, detection, crm };
   } catch (err) {
     const message = (err instanceof Error ? err.message : String(err)).slice(0, 1000);
     console.error('account-summary: nightly detection failed', run.run_id, message);
@@ -445,7 +495,8 @@ async function nightly(body: Record<string, unknown>) {
     const [w] = await rpc<RunWindow[]>('account_ai_summary_window', { p_local_date: date });
     if (Date.parse(w.window_end) > Date.now()) throw new Error(`La fenêtre du ${date} n'est pas terminée.`);
     const found = await detectActivity(db, Date.parse(w.window_start), Date.parse(w.window_end));
-    return { dry_run: true, date, accounts: found.accounts, ...found.stats };
+    const { accounts, expired } = await withExpired(found.accounts, w.window_end);
+    return { dry_run: true, date, accounts, ...found.stats, expired };
   }
 
   const [run] = await rpc<RunWindow[]>('account_ai_summary_start_run', { p_local_date: date });
@@ -508,13 +559,20 @@ Deno.serve(async (req: Request) => {
       const job = background(work(deadline), body.wait === true);
       return job ? json(await job) : json({ started: true }, 202);
     }
+    if (body.action === 'push_crm') {
+      return json(await pushPending(Math.min(CRM_PUSH_LIMIT, Math.max(1, Number(body.limit) || CRM_PUSH_LIMIT))));
+    }
 
     const accountId = String(body.account_id ?? '');
     if (!/^\d{6,25}$/.test(accountId)) return json({ error: 'account_id invalide.' }, 400);
+    const user = (body.user && typeof body.user === 'object' ? body.user : {}) as Requester;
     if (body.action === 'get') return json(await getState(accountId));
-    if (body.action === 'generate') {
-      const user = (body.user && typeof body.user === 'object' ? body.user : {}) as Requester;
-      return json(await startGeneration(accountId, user, deadline));
+    if (body.action === 'generate') return json(await startGeneration(accountId, user, deadline));
+    if (body.action === 'quote_decline') {
+      const summaryId = Number(body.summary_id);
+      const step = Number(body.step);
+      if (!Number.isInteger(summaryId) || !Number.isInteger(step) || step < 0) return json({ error: 'summary_id ou step invalide.' }, 400);
+      return json(await declineQuote(accountId, summaryId, step, user));
     }
     return json({ error: 'action inconnue.' }, 400);
   } catch (err) {

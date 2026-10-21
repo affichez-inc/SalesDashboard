@@ -20,8 +20,24 @@ The widget never calls Supabase directly. It calls the Zoho **Connection**
 | Connection value | the function's `SUMMARY_API_KEY` secret |
 | Endpoint | `https://auyfucbskylougsmmrks.supabase.co/functions/v1/account-summary` |
 
-Tasks are created with `ZOHO.CRM.API.insertRecord` as the signed-in CRM user,
-linked to the account (and to the contact when the step names one).
+Each next step carries an `action`, and its button applies it:
+
+| action | button | how |
+|---|---|---|
+| `create_task` | Créer la tâche | `ZOHO.CRM.API.insertRecord`, linked to the account (and the contact the step names) |
+| `close_task` | Fermer la tâche, then Confirmer | `updateRecord` Status set to the label of the option whose actual value is `Completed` ("Achevé", read from the field's options), the reason added to the description |
+| `update_task` | Mettre à jour la tâche | `updateRecord` Due_Date (and Subject when the step gives one), the reason added to the description |
+| `decline_quote` | Marquer refusé, then Confirmer | the function's `quote_decline` action: Books marks the quote declined and gets a comment hidden from the client; the CRM Potential follows to "Perdu" through Books' own sync |
+| `revise_quote` | Modifier dans Books | opens the quote's edit page in Books; the rep makes the change |
+
+A picklist is written with the option's label, not its actual value: sent the
+actual value `Completed`, Zoho stores a stray word beside "Achevé" and leaves the
+task open, with no Closed_Time.
+
+Task actions run as the signed-in CRM user, so Zoho checks their permissions and
+records them as the author; each first reads the task, so a task closed since
+the card was written is reported, not reopened. A card written before actions
+existed has steps without `action`: they are `create_task`.
 
 ## Package and install
 
@@ -42,6 +58,41 @@ npx zoho-extension-toolkit pack        # → dist/zoho-widget.zip
 To update: pack again, then Widgets → *Résumé IA du compte* → Change → the new
 zip → Save. Check the "Widget updated successfully" toast and the Last Modified
 time; a save that did not go through keeps serving the old files.
+
+## The card at the top of the page (business card extension)
+
+`app/card.html` is the same widget with `data-layout="compact"`: header, alerts and
+figures stay on show, and the synthesis, key points and next steps share one panel
+under tabs. It runs as a **Business Card Widget**, which Zoho draws on the standard
+Account page under the owner/phone card and the Potentials / Next Action / Contacts
+row, above the field sections. A Business Card Widget exists only inside an
+extension, so it does not appear under Developer Hub → Widgets:
+
+| Setting | Value |
+|---|---|
+| Extension | *Resume IA du compte* (namespace `resumeiatestemplacement`), installed privately in the org |
+| Developer console | Setup → Marketplace → Extension Builder → workspace *affichez* |
+| Connected app | `bctest`, internal hosting, zip `dist/resume-ia-card.zip` (a copy of `dist/zoho-widget.zip`) |
+| Component | Business Card Widget, module Accounts, start URL `/card.html` |
+
+Three limits shape the compact layout:
+
+- **500 px, at most.** Zoho caps the frame height for this slot. Only the tab panel
+  scrolls; the frame never does.
+- **Zoho pads the frame** 15 px top and bottom and 20 px at the sides, inside the
+  height it is given (`box-sizing: border-box`). The card therefore asks for its
+  height plus 30 (`COMPACT_INSET`), and its own CSS caps it at 466 px. Ask for the
+  bare height and the bottom line is cut off.
+- **No profile setting.** The extension shows the slot to everyone it is installed
+  for, so `PILOT_PROFILES` in `widget.js` limits it: for any other profile the card
+  draws nothing and asks no height, and Zoho keeps the slot hidden. An empty list
+  shows it to everyone.
+
+To update: pack, copy `dist/zoho-widget.zip` to `dist/resume-ia-card.zip`, then in
+the developer console Connected Apps → `bctest` → *Replace existing file*, and
+Publish with a release note. The org keeps running the installed version until an
+admin opens the extension's install URL and upgrades it (the Terms of Service and
+data-access boxes are asked again on every upgrade).
 
 ## The card at the top of the page (Canvas)
 

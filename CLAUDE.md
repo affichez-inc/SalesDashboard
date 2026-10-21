@@ -538,6 +538,15 @@ Three things about the Comptes module that are not obvious:
   The detail table filters `zoho_accounts_enriched.is_internal` instead, because
   PostgREST's `rating=not.in.(…)` is NULL — not TRUE — for the 977 unrated rows
   and would silently hide them.
+- **Rating is shown in French and filtered on the stored value.** The
+  "Évaluation" filter (`?evaluation=`, `p_ratings` on the Comptes RPCs, `rating=in.(…)`
+  on the view) ANDs with Statut, which stays a plain switch. `zoho_accounts.rating`
+  holds what the sync's English login reads, and five options read differently in
+  Zoho's French UI: `Client à reprendre` is "Compte sans représentant associé",
+  `Actif` is "Actif : Client avec une tâche de suivi en cours", and so on.
+  `src/lib/accountRating.ts` maps one to the other for the dropdown, the detail
+  column and the CSV. It copies the fr_FR Translations export of 2026-09-29 and
+  nothing syncs it: a French label renamed in Zoho has to be renamed there too.
 
 **Royer & Fils / VotreLogo.ca is a different company's revenue.** Measured
 2026-09-07: `SUM(Ventes_totales_2022_2026)` is $5,530,878.34 across all 20,645
@@ -707,6 +716,34 @@ full price.
   (Montreal day × trigger), `account_ai_summary_run_report`.
 - GLM writes the current year into dates ("7 mai 2026"); `dropCurrentYear` in `clean.ts` restores
   the card's style. A bare `SUMMARY_MODEL` (no `vendor/`) is a leftover Anthropic id and is ignored.
+- **Next steps are actions** (`card.ts`, migration `20261020180000_account_summary_refresh_and_crm_fields.sql`):
+  `create_task`, `close_task`, `update_task` on an open rep task [T…], `decline_quote` on an open
+  quote, `revise_quote` on an open or draft quote [D…]. A step naming a record the dossier does not
+  offer for that action (an automatic task, a quote already decided) is dropped, never guessed. Task
+  actions run in the widget as the signed-in user; a decline goes through the function
+  (`quote_decline`), which re-reads the quote's status in Books first. Declining in Books moves the
+  CRM Potential to "Perdu" by itself (Books' own sync, within seconds).
+- **Every citation opens what it names** (`SourceRef` in `prompt.ts`): a quote, invoice or credit
+  note its Books page (`#/creditnotes/` for a credit note, whose id is what `invoices.zoho_id` holds
+  for an `is_avoir` row), a task, meeting or contact its CRM record. Zoho has no page for a single
+  note and shows an email only from its contact, so the card stores what the model read of each
+  cited note and email (`preview`) and the widget shows it in place, with a link to the record it
+  sits on. The computed facts end with the [ids] of the records they rest on (last invoice, latest
+  and open quotes, last exchanges, overdue invoices), so a point cites those rather than A1; A1
+  ("fiche") is this page and is not a link. Cards written before 2026-10-21 have no `preview`:
+  their note chips open the record the note sits on.
+- **The card is copied onto the Zoho account** (`crm.ts`): six custom Accounts fields (temperature,
+  its reason, first next step, date, open quotes and overdue before tax), written after every
+  summary with `trigger: []` so no workflow fires, by the summary token (it alone has write scopes:
+  Accounts update, Books estimates create/update). The API names are constants in `crm.ts`; a
+  field missing in Zoho fails the write, which is stored on the row (`crm_error`) and retried at
+  night (`push_crm`). `SUMMARY_CRM_FIELDS=off` stops the writes.
+- **A card goes stale by date** (`refresh_at`, `refreshDays` in `prompt.ts`): an open quote passing 30
+  days or expiring, an invoice falling due or passing 30 days late, the last purchase or real
+  exchange leaving its window. None of these modifies a record, so activity detection misses them;
+  the 1 AM run also queues accounts whose latest card reached its `refresh_at`
+  (`account_ai_summary_expired`, `temperature_expired` in the run's detection). The mirror holds no
+  invoice due dates: unpaid ones are assumed net 30.
 
 ### Leads: which table is which
 

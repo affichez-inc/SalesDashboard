@@ -14,7 +14,9 @@ import { booksGet, BOOKS_ORG_IDS, chunk, coql, coqlIds, mapLimit, ZohoError } fr
 
 export type ActivityKind =
   | 'note' | 'task_created' | 'task_closed' | 'meeting_booked' | 'meeting_held'
-  | 'contact_created' | 'account_created' | 'quote' | 'invoice';
+  | 'contact_created' | 'account_created' | 'quote' | 'invoice'
+  // Not activity: the account's card went stale by date (index.ts adds these).
+  | 'temperature_expired';
 
 const MIN = 60_000;
 
@@ -33,6 +35,7 @@ const VISIBLE_AFTER_MS: Record<ActivityKind, number> = {
   invoice: 10 * MIN,
   contact_created: 130 * MIN,
   account_created: 130 * MIN,
+  temperature_expired: 0,
 };
 
 /** Affichez's own entities and its suppliers are never summarised. */

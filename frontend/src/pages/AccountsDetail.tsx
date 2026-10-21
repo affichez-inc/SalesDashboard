@@ -648,7 +648,10 @@ export default function AccountsDetail() {
                 ) : rows.length === 0 ? (
                     <p className="py-20 text-center text-sm text-ink-mute">Aucun compte ne correspond à ces filtres.</p>
                 ) : (
-                    <div className="overflow-x-auto">
+                    // Scrolls in a box no taller than the window, both pagers
+                    // included: unbounded, the horizontal scrollbar sat under the
+                    // 100th row and the sticky header had nothing to stick to.
+                    <div className="max-h-[calc(100dvh-8rem)] overflow-auto">
                         {/* translate="no" on the whole table: none of this is prose -
                             it is company names, phone numbers, amounts and dates.
                             Translating it is never wanted, and Chrome freezing a

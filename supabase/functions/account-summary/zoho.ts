@@ -35,10 +35,17 @@ function env(...names: string[]): string {
   return '';
 }
 
+/** FNV-1a of a refresh token: a new token gets a new cache row, never the old token's scopes. */
+function fingerprint(s: string): string {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < s.length; i++) h = Math.imul(h ^ s.charCodeAt(i), 0x01000193);
+  return (h >>> 0).toString(16).padStart(8, '0');
+}
+
 function crmCredentials(): Credentials {
   if (Deno.env.get('ZOHO_SUMMARY_REFRESH_TOKEN')) {
     return {
-      cacheKey: 'crm_summary',
+      cacheKey: `crm_summary_${fingerprint(env('ZOHO_SUMMARY_REFRESH_TOKEN'))}`,
       clientId: env('ZOHO_SUMMARY_CLIENT_ID', 'ZOHO_CRM_CLIENT_ID', 'ZOHO_CLIENT_ID'),
       clientSecret: env('ZOHO_SUMMARY_CLIENT_SECRET', 'ZOHO_CRM_CLIENT_SECRET', 'ZOHO_CLIENT_SECRET'),
       refreshToken: env('ZOHO_SUMMARY_REFRESH_TOKEN'),
@@ -59,6 +66,12 @@ function booksCredentials(): Credentials {
     clientSecret: env('ZOHO_CLIENT_SECRET'),
     refreshToken: env('ZOHO_REFRESH_TOKEN'),
   };
+}
+
+/** Writes go through the summary token only: it alone is granted write scopes. */
+function writeCredentials(): Credentials {
+  if (!Deno.env.get('ZOHO_SUMMARY_REFRESH_TOKEN')) throw new Error('ZOHO_SUMMARY_REFRESH_TOKEN non configuré : écriture impossible.');
+  return crmCredentials();
 }
 
 const TOKEN_SKEW_MS = 5 * 60 * 1000;
@@ -164,13 +177,14 @@ async function slot<T>(fn: () => Promise<T>): Promise<T> {
 }
 
 /**
- * One read (GET, or a COQL POST), retried when Zoho throttles or fails on its
- * side. Returns null on 204 (no data).
+ * One request, retried when Zoho throttles or fails on its side. A write is
+ * retried on throttling only: after a 5xx it may have been applied. Returns null
+ * on 204 (no data).
  */
 async function zohoRequest<T>(
   url: string,
   creds: Credentials,
-  init: { method?: 'GET' | 'POST'; body?: unknown } = {},
+  init: { method?: 'GET' | 'POST' | 'PUT'; body?: unknown; write?: boolean } = {},
 ): Promise<T | null> {
   let rejected: string | null = null;
   for (let attempt = 0; ; attempt++) {
@@ -188,17 +202,24 @@ async function zohoRequest<T>(
 
     const text = await res.text();
     let code: string | null = null;
-    try { code = (JSON.parse(text) as { code?: string }).code ?? null; } catch { /* not JSON */ }
+    let message = '';
+    try {
+      // CRM puts a write's error on the record (data[0]); Books answers a numeric code.
+      const body = JSON.parse(text) as { code?: string | number; message?: string; data?: Array<{ code?: string; message?: string }> };
+      const item = body.data?.[0];
+      code = String(body.code ?? item?.code ?? '') || null;
+      message = String(body.message ?? item?.message ?? '');
+    } catch { /* not JSON */ }
 
     if (res.status === 401 && attempt === 0 && code === 'INVALID_TOKEN') {
       rejected = token;
       continue;
     }
-    if ((res.status === 429 || res.status >= 500) && attempt < RETRY_DELAYS_MS.length) {
+    if ((res.status === 429 || (!init.write && res.status >= 500)) && attempt < RETRY_DELAYS_MS.length) {
       await new Promise((r) => setTimeout(r, RETRY_DELAYS_MS[attempt]));
       continue;
     }
-    throw new ZohoError(`Zoho ${res.status} ${code ?? ''} on ${url.split('?')[0]}`, res.status, code);
+    throw new ZohoError(`Zoho ${res.status} ${code ?? ''} on ${url.split('?')[0]}${message ? ` : ${message.slice(0, 200)}` : ''}`, res.status, code);
   }
 }
 
@@ -219,6 +240,24 @@ export async function coql<T>(query: string): Promise<T[]> {
 export function booksGet<T>(path: string, orgId: string, params: Record<string, string> = {}): Promise<T | null> {
   const qs = new URLSearchParams({ organization_id: orgId, ...params }).toString();
   return zohoRequest<T>(`${BOOKS_API}/${path}?${qs}`, booksCredentials());
+}
+
+/** Updates one CRM record without triggering workflows, approvals or blueprints. */
+export async function crmUpdate(module: string, id: string, data: Record<string, unknown>): Promise<void> {
+  if (!/^\d+$/.test(id)) throw new Error(`Invalid Zoho id: ${id}`);
+  const res = await zohoRequest<{ data?: Array<{ code?: string; message?: string; details?: unknown }> }>(
+    `${CRM_API}/${module}/${id}`,
+    writeCredentials(),
+    { method: 'PUT', body: { data: [data], trigger: [] }, write: true },
+  );
+  const row = res?.data?.[0];
+  if (row?.code !== 'SUCCESS') {
+    throw new ZohoError(`Zoho CRM ${row?.code ?? 'sans réponse'} : ${row?.message ?? ''} ${JSON.stringify(row?.details ?? '')}`, 200, row?.code ?? null);
+  }
+}
+
+export function booksWrite<T>(method: 'POST' | 'PUT', path: string, orgId: string, body?: unknown): Promise<T | null> {
+  return zohoRequest<T>(`${BOOKS_API}/${path}?organization_id=${orgId}`, writeCredentials(), { method, body, write: true });
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -253,7 +292,7 @@ export function crmRecordUrl(module: string, id: string): string {
   return `https://crm.zoho.com/crm/org${CRM_ORG_ID}/tab/${module}/${id}`;
 }
 
-export function booksUrl(office: string | null, kind: 'quotes' | 'invoices', id: string): string | null {
+export function booksUrl(office: string | null, kind: 'quotes' | 'invoices' | 'creditnotes', id: string): string | null {
   const org = office ? BOOKS_ORG_IDS[office] : undefined;
   return org ? `https://books.zoho.com/app/${org}#/${kind}/${id}` : null;
 }

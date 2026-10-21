@@ -14,16 +14,19 @@ ALTER TABLE public.account_ai_summaries
   ADD COLUMN IF NOT EXISTS refresh_at    TIMESTAMPTZ,
   ADD COLUMN IF NOT EXISTS crm_pushed_at TIMESTAMPTZ,
   ADD COLUMN IF NOT EXISTS crm_error     TEXT;
+
 COMMENT ON COLUMN public.account_ai_summaries.refresh_at IS
   'Done rows: when the card goes stale by date alone (midnight UTC of that Montreal day); the 1 AM run of that day rewrites it. NULL: nothing on the card expires by date.';
 COMMENT ON COLUMN public.account_ai_summaries.crm_pushed_at IS
   'When the card was copied onto the Zoho account''s custom fields. NULL on the latest card of an account: not copied yet, or the copy failed (crm_error).';
 COMMENT ON COLUMN public.account_ai_summaries.crm_error IS
   'Why the last copy onto the Zoho account failed.';
+
 -- The latest card of each account, as the widget picks it.
 CREATE INDEX IF NOT EXISTS account_ai_summaries_latest_done_idx
   ON public.account_ai_summaries (zoho_account_id, started_at DESC, id DESC)
   WHERE status = 'done';
+
 -- Accounts whose latest card has reached its refresh day by p_until. Internal
 -- and supplier accounts, and accounts gone from the mirror, are left out.
 CREATE OR REPLACE FUNCTION public.account_ai_summary_expired(p_until TIMESTAMPTZ)
@@ -44,6 +47,7 @@ AS $$
     AND a.rating IS DISTINCT FROM 'Compte interne : Ne pas reprendre'
     AND a.rating IS DISTINCT FROM 'Fournisseur';
 $$;
+
 -- The latest card of each account not yet copied onto the Zoho account, newest
 -- first.
 CREATE OR REPLACE FUNCTION public.account_ai_summary_crm_pending(p_limit INTEGER DEFAULT 200)
@@ -63,6 +67,7 @@ AS $$
   ORDER BY l.completed_at DESC NULLS LAST, l.id DESC
   LIMIT p_limit;
 $$;
+
 REVOKE ALL ON FUNCTION public.account_ai_summary_expired(TIMESTAMPTZ) FROM PUBLIC, anon, authenticated;
 REVOKE ALL ON FUNCTION public.account_ai_summary_crm_pending(INTEGER) FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.account_ai_summary_expired(TIMESTAMPTZ) TO service_role;

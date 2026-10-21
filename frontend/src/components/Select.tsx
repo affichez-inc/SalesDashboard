@@ -20,6 +20,8 @@ export interface SelectOption {
      * carries the meaning, and nothing here depends on the icon rendering.
      */
     icon?: React.ReactNode;
+    /** Shown on hover over the option in MultiSelect, for a label that is a shortened form. */
+    hint?: string;
 }
 
 interface SelectProps {

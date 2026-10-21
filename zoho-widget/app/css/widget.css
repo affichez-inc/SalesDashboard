@@ -192,9 +192,27 @@ html, body {
 .step.is-done .step-num { background: var(--good-soft); color: var(--good); }
 .step-num .ico { width: 13px; height: 13px; }
 .step-title { color: var(--ink); font-size: 13.5px; font-weight: 600; line-height: 1.45; padding-top: 2px; }
+.step-reason { margin: 3px 0 0; color: var(--mute); font-size: 12.5px; line-height: 1.5; }
 .step-meta { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 7px; }
 .step-foot { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; margin-top: 10px; }
 .step-foot .srcs { margin-top: 0; }
+.step-confirm { display: inline-flex; gap: 6px; flex-wrap: wrap; }
+
+/* The task or quote a step acts on: opens it */
+.target {
+  display: inline-flex; align-items: center; gap: 5px; max-width: 100%;
+  padding: 2px 9px;
+  border: 1px solid var(--accent-line);
+  border-radius: var(--radius-pill);
+  background: var(--accent-soft); color: var(--accent-ink);
+  font: 500 12px/20px var(--font);
+  cursor: pointer;
+  transition: border-color 150ms;
+}
+.target .ico { width: 13px; height: 13px; flex: none; color: var(--accent); }
+.target-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.target:hover { border-color: var(--accent); }
+.target:focus-visible { outline: 2px solid var(--ring); outline-offset: 1px; }
 .empty-note { margin: 10px 0 0; color: var(--faint); font-size: 12.5px; }
 
 /* Small labelled chips: due date, contact, sources */
@@ -224,6 +242,51 @@ html, body {
 .src:hover { border-color: var(--accent-line); background: var(--accent-soft); color: var(--accent-ink); }
 .src:hover .ico { color: var(--accent); }
 .src:focus-visible { outline: 2px solid var(--ring); outline-offset: 1px; }
+.src.is-on { border-color: var(--accent); background: var(--accent-soft); color: var(--accent-ink); }
+.src.is-on .ico { color: var(--accent); }
+/* The account itself: this page, nothing to open */
+.src.is-static { cursor: default; }
+.src.is-static:hover { border-color: var(--line); background: var(--surface); color: var(--mute); }
+.src.is-static:hover .ico { color: var(--faint); }
+
+/* A cited note or email, shown in place: Zoho has no page for a single note */
+.ref-preview {
+  margin-top: 8px; padding: 10px 12px;
+  border: 1px solid var(--accent-line);
+  border-radius: var(--radius-lg);
+  background: var(--surface-soft);
+}
+.ref-head { display: flex; align-items: center; gap: 6px; min-width: 0; color: var(--ink); font-size: 12.5px; font-weight: 600; }
+.ref-head > .ico { width: 13px; height: 13px; flex: none; color: var(--accent); }
+.ref-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ref-date { flex: none; color: var(--mute); font-weight: 500; }
+.ref-date::before { content: "·"; margin-right: 6px; }
+.ref-close {
+  flex: none; display: grid; place-items: center; width: 22px; height: 22px; margin-left: auto; padding: 0;
+  border: 0; border-radius: var(--radius-sm);
+  background: transparent; color: var(--faint);
+  cursor: pointer;
+}
+.ref-close:hover { background: var(--chip); color: var(--ink); }
+.ref-close:focus-visible { outline: 2px solid var(--ring); outline-offset: 1px; }
+.ref-close .ico { width: 13px; height: 13px; }
+.ref-title { margin-top: 6px; color: var(--ink); font-size: 12.5px; font-weight: 600; overflow-wrap: anywhere; }
+.ref-text {
+  margin-top: 6px; max-height: 220px; overflow-y: auto;
+  color: var(--text); font-size: 12.5px; line-height: 1.55;
+  white-space: pre-wrap; overflow-wrap: anywhere;
+}
+.ref-empty { margin: 6px 0 0; color: var(--mute); font-size: 12.5px; }
+.ref-foot { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 10px; margin-top: 8px; color: var(--mute); font-size: 12px; }
+.ref-open {
+  display: inline-flex; align-items: center; gap: 5px; padding: 0;
+  border: 0; background: transparent; color: var(--accent);
+  font: 500 12px/18px var(--font);
+  cursor: pointer;
+}
+.ref-open:hover { color: var(--accent-hover); text-decoration: underline; }
+.ref-open:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; border-radius: var(--radius-sm); }
+.ref-open .ico { width: 12px; height: 12px; }
 
 /* ── Footer ──────────────────────────────────────────────────────────────── */
 .foot {
@@ -257,6 +320,11 @@ html, body {
 .btn-done { border-color: var(--good-line); background: var(--good-soft); color: var(--good-ink); }
 .btn-done .ico { color: var(--good); }
 .btn-done:hover:not(:disabled) { border-color: var(--good); }
+/* The second click of an action that changes a record for good */
+.btn-danger { border-color: transparent; background: var(--critical); color: #ffffff; }
+.btn-danger:hover:not(:disabled) { background: var(--critical-ink); }
+.btn-ghost { border-color: transparent; background: transparent; color: var(--mute); }
+.btn-ghost:hover:not(:disabled) { background: var(--chip); color: var(--text); }
 
 /* ── Loading, empty and error states ─────────────────────────────────────── */
 .empty { display: flex; flex-direction: column; align-items: center; text-align: center; padding: 18px 12px 8px; }
@@ -306,3 +374,60 @@ html, body {
 @media (prefers-reduced-motion: reduce) {
   .spinner { animation-duration: 3s; }
 }
+
+/* ── Compact layout (card.html) ───────────────────────────────────────────── */
+/*
+ * The business-card slot at the top of the Account page: Zoho caps the frame at
+ * 500 px. Header, alerts and figures stay on show; the synthesis, key points and
+ * next steps share one panel under tabs, which scrolls inside the cap.
+ */
+/*
+ * The frame never scrolls: only the tab panel does, inside the 500 px cap. Zoho
+ * pads the frame 15 px top and bottom and 20 px at the sides, which is the card's
+ * whole inset; 500 less those 30 and the 4 px the resize adds is 466.
+ */
+body[data-layout="compact"] { overflow: hidden; }
+body[data-layout="compact"] #root { padding: 0; }
+body[data-layout="compact"] .card { gap: 10px; max-height: 466px; }
+body[data-layout="compact"] .body { gap: 10px; flex: 1 1 auto; min-height: 0; }
+
+body[data-layout="compact"] .hero { padding: 8px 12px; gap: 12px; }
+body[data-layout="compact"] .hero-icon { width: 34px; height: 34px; }
+body[data-layout="compact"] .hero-icon .ico { width: 18px; height: 18px; }
+body[data-layout="compact"] .hero-kicker { display: none; }
+body[data-layout="compact"] .hero-title { font-size: 16px; }
+body[data-layout="compact"] .hero-reason { margin-top: 0; font-size: 12.5px; }
+
+body[data-layout="compact"] .signal { padding: 4px 10px; font-size: 12px; }
+
+body[data-layout="compact"] .kpis { gap: 6px; }
+body[data-layout="compact"] .kpi { gap: 8px; padding: 7px 9px; }
+body[data-layout="compact"] .kpi-icon { width: 26px; height: 26px; }
+body[data-layout="compact"] .kpi-icon .ico { width: 14px; height: 14px; }
+body[data-layout="compact"] .kpi-label, body[data-layout="compact"] .kpi-sub { font-size: 11px; }
+body[data-layout="compact"] .kpi-value { font-size: 14.5px; }
+@media (min-width: 860px) {
+  body[data-layout="compact"] .kpis { grid-template-columns: repeat(6, minmax(0, 1fr)); }
+}
+
+.tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--line); flex: none; }
+.tab {
+  display: inline-flex; align-items: center; gap: 6px;
+  margin-bottom: -1px; padding: 6px 12px 8px;
+  border: 0; border-bottom: 2px solid transparent;
+  background: none; color: var(--mute);
+  font: 600 13px/1.2 var(--font);
+  cursor: pointer;
+}
+.tab:hover { color: var(--text); }
+.tab.is-on { border-bottom-color: var(--accent); color: var(--accent-ink); }
+.tab.is-on .count { background: var(--accent-soft); color: var(--accent-ink); }
+.tab:focus-visible { outline: 2px solid var(--ring); outline-offset: 1px; border-radius: var(--radius-sm); }
+
+.tab-panel { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding-right: 4px; }
+.synth-panel { display: flex; flex-direction: column; gap: 10px; }
+.synth-panel .synth-text { font-size: 13.5px; line-height: 1.65; }
+.synth-panel .foot { padding-top: 8px; }
+body[data-layout="compact"] .steps { padding-top: 0; }
+body[data-layout="compact"] .point { padding: 8px 0; }
+body[data-layout="compact"] .ref-text { max-height: 160px; }

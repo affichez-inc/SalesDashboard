@@ -1,4 +1,5 @@
-// Turns CRM email and note HTML into short plain text for the model.
+// Turns CRM email and note HTML into short plain text for the model, and
+// tidies the model's text for the card.
 
 const NAMED_ENTITIES: Record<string, string> = {
   nbsp: ' ', amp: '&', lt: '<', gt: '>', quot: '"', apos: "'",
@@ -134,4 +135,17 @@ export function truncate(text: string, maxChars: number): string {
 /** One line, for subjects and titles. */
 export function oneLine(text: string | null | undefined, maxChars = 140): string {
   return truncate(htmlToText(text).replace(/\s*\n\s*/g, ' '), maxChars);
+}
+
+const MONTHS = 'janvier|janv|février|févr|mars|avril|avr|mai|juin|juillet|juil|août|septembre|sept|octobre|oct|novembre|nov|décembre|déc';
+
+/**
+ * "9 oct. 2026" → "9 oct." when 2026 is `year`: the card leaves out the current
+ * year. A sentence's full stop after the year merges with the abbreviation's.
+ */
+export function dropCurrentYear(text: string, year: string): string {
+  return text.replace(
+    new RegExp(`(\\b\\d{1,2}(?:er)?\\s+(?:${MONTHS})(\\.)?)\\s+${year}(?!\\d)(\\.)?`, 'gu'),
+    (_m, date: string, abbrev: string | undefined, stop: string | undefined) => date + (stop && !abbrev ? stop : ''),
+  );
 }

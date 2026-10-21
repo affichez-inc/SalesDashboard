@@ -34,12 +34,14 @@ CREATE TABLE IF NOT EXISTS public.account_ai_summary_runs (
   detected_at     TIMESTAMPTZ,
   CHECK (window_end > window_start)
 );
+
 COMMENT ON TABLE public.account_ai_summary_runs IS
   'One row per nightly summary run: the activity window, what was found and what was queued.';
 COMMENT ON COLUMN public.account_ai_summary_runs.window_start IS
   'End of the last successful run (24 h earlier by default, 7 days at most), so a failed night is covered by the next one.';
 COMMENT ON COLUMN public.account_ai_summary_runs.detection IS
   'Items found per activity kind, items not tied to an account, internal accounts left out, API calls and duration.';
+
 -- ─── Summaries: the queue ─────────────────────────────────────────────────────
 
 ALTER TABLE public.account_ai_summaries
@@ -52,6 +54,7 @@ ALTER TABLE public.account_ai_summaries
   ADD COLUMN IF NOT EXISTS last_activity_at TIMESTAMPTZ,
   ADD COLUMN IF NOT EXISTS ready_at         TIMESTAMPTZ,
   ADD COLUMN IF NOT EXISTS skip_reason      TEXT;
+
 ALTER TABLE public.account_ai_summaries DROP CONSTRAINT IF EXISTS account_ai_summaries_status_check;
 ALTER TABLE public.account_ai_summaries ADD CONSTRAINT account_ai_summaries_status_check
   CHECK (status IN ('queued', 'running', 'done', 'failed', 'skipped'));
@@ -61,20 +64,25 @@ ALTER TABLE public.account_ai_summaries ADD CONSTRAINT account_ai_summaries_trig
 ALTER TABLE public.account_ai_summaries DROP CONSTRAINT IF EXISTS account_ai_summaries_skip_reason_check;
 ALTER TABLE public.account_ai_summaries ADD CONSTRAINT account_ai_summaries_skip_reason_check
   CHECK (skip_reason IN ('fresh', 'already_queued', 'limit'));
+
 -- Rows from before this migration started when they were created.
 UPDATE public.account_ai_summaries
 SET started_at = created_at, attempts = 1
 WHERE started_at IS NULL AND status <> 'queued';
+
 -- One queued generation per account; a manual one may run beside it.
 CREATE UNIQUE INDEX IF NOT EXISTS account_ai_summaries_one_queued_idx
   ON public.account_ai_summaries (zoho_account_id)
   WHERE status = 'queued';
+
 CREATE INDEX IF NOT EXISTS account_ai_summaries_claim_idx
   ON public.account_ai_summaries (next_attempt_at, id)
   WHERE status = 'queued';
+
 CREATE INDEX IF NOT EXISTS account_ai_summaries_run_idx
   ON public.account_ai_summaries (run_id)
   WHERE run_id IS NOT NULL;
+
 COMMENT ON COLUMN public.account_ai_summaries.trigger IS
   'manual: the Zoho widget''s button; nightly: the 1 AM run.';
 COMMENT ON COLUMN public.account_ai_summaries.started_at IS
@@ -85,6 +93,7 @@ COMMENT ON COLUMN public.account_ai_summaries.ready_at IS
   'Nightly only: from when the summary can see all of that activity (the mirror syncs lag the CRM). A summary started after it is fresh.';
 COMMENT ON COLUMN public.account_ai_summaries.skip_reason IS
   'fresh: a summary started after ready_at already exists; already_queued: an earlier run still holds it; limit: over the nightly cap.';
+
 -- ─── Model calls ──────────────────────────────────────────────────────────────
 
 CREATE TABLE IF NOT EXISTS public.ai_model_calls (
@@ -160,10 +169,12 @@ CREATE TABLE IF NOT EXISTS public.ai_model_calls (
   response_chars              INTEGER,
   usage                       JSONB
 );
+
 CREATE INDEX IF NOT EXISTS ai_model_calls_created_idx ON public.ai_model_calls (created_at);
 CREATE INDEX IF NOT EXISTS ai_model_calls_account_idx ON public.ai_model_calls (zoho_account_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS ai_model_calls_summary_idx ON public.ai_model_calls (summary_id) WHERE summary_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS ai_model_calls_run_idx ON public.ai_model_calls (run_id) WHERE run_id IS NOT NULL;
+
 COMMENT ON TABLE public.ai_model_calls IS
   'Every request sent to a language model, one row per attempt, with its tokens, prices and cost. Written by the edge functions only.';
 COMMENT ON COLUMN public.ai_model_calls.cost_usd IS
@@ -174,30 +185,37 @@ COMMENT ON COLUMN public.ai_model_calls.reasoning_tokens IS
   'Thinking tokens, part of completion_tokens and billed at the output price.';
 COMMENT ON COLUMN public.ai_model_calls.usage IS
   'The usage object as OpenRouter returned it.';
+
 -- ─── Access ───────────────────────────────────────────────────────────────────
 -- Admins read; the edge functions write with the service role.
 
 ALTER TABLE public.account_ai_summary_runs ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.ai_model_calls ENABLE ROW LEVEL SECURITY;
+
 DROP POLICY IF EXISTS listed_users_only ON public.account_ai_summary_runs;
 CREATE POLICY listed_users_only ON public.account_ai_summary_runs
   AS RESTRICTIVE FOR ALL TO authenticated
   USING ((SELECT public.app_is_listed()));
+
 DROP POLICY IF EXISTS account_ai_summary_runs_select_admin ON public.account_ai_summary_runs;
 CREATE POLICY account_ai_summary_runs_select_admin ON public.account_ai_summary_runs
   FOR SELECT TO authenticated
   USING ((SELECT public.app_is_admin()));
+
 DROP POLICY IF EXISTS listed_users_only ON public.ai_model_calls;
 CREATE POLICY listed_users_only ON public.ai_model_calls
   AS RESTRICTIVE FOR ALL TO authenticated
   USING ((SELECT public.app_is_listed()));
+
 DROP POLICY IF EXISTS ai_model_calls_select_admin ON public.ai_model_calls;
 CREATE POLICY ai_model_calls_select_admin ON public.ai_model_calls
   FOR SELECT TO authenticated
   USING ((SELECT public.app_is_admin()));
+
 REVOKE ALL ON public.account_ai_summary_runs, public.ai_model_calls FROM PUBLIC, anon, authenticated;
 GRANT SELECT ON public.account_ai_summary_runs, public.ai_model_calls TO authenticated;
 GRANT ALL ON public.account_ai_summary_runs, public.ai_model_calls TO service_role;
+
 -- ─── Cost views ───────────────────────────────────────────────────────────────
 -- security_invoker: each reads with the caller's rights, so admins only.
 
@@ -233,8 +251,10 @@ FROM public.account_ai_summaries s
 LEFT JOIN public.ai_model_calls c ON c.summary_id = s.id
 LEFT JOIN public.zoho_accounts a ON a.zoho_account_id = s.zoho_account_id
 GROUP BY s.id, a.account_name;
+
 COMMENT ON VIEW public.ai_summary_costs IS
   'One row per summary generation (or skipped account), with the tokens and cost of its model calls.';
+
 CREATE OR REPLACE VIEW public.ai_cost_by_account
 WITH (security_invoker = true) AS
 SELECT
@@ -258,8 +278,10 @@ LEFT JOIN public.account_ai_summaries s ON s.id = c.summary_id
 LEFT JOIN public.zoho_accounts a ON a.zoho_account_id = c.zoho_account_id
 WHERE c.feature = 'account_summary'
 GROUP BY c.zoho_account_id, a.account_name;
+
 COMMENT ON VIEW public.ai_cost_by_account IS
   'Model calls and cost per CRM account, all time and over the last 30 days.';
+
 CREATE OR REPLACE VIEW public.ai_cost_daily
 WITH (security_invoker = true) AS
 SELECT
@@ -287,8 +309,10 @@ SELECT
 FROM public.ai_model_calls c
 LEFT JOIN public.account_ai_summaries s ON s.id = c.summary_id
 GROUP BY 1, 2, 3;
+
 COMMENT ON VIEW public.ai_cost_daily IS
   'Model calls, tokens and cost per Montreal calendar day, per feature and trigger.';
+
 CREATE OR REPLACE VIEW public.account_ai_summary_run_report
 WITH (security_invoker = true) AS
 SELECT
@@ -315,12 +339,15 @@ SELECT
 FROM public.account_ai_summary_runs r
 LEFT JOIN public.account_ai_summaries s ON s.run_id = r.id
 GROUP BY r.id;
+
 COMMENT ON VIEW public.account_ai_summary_run_report IS
   'Each nightly run: accounts found, queued, done, failed, skipped and still pending, and what it cost.';
+
 REVOKE ALL ON public.ai_summary_costs, public.ai_cost_by_account, public.ai_cost_daily,
               public.account_ai_summary_run_report FROM PUBLIC, anon, authenticated;
 GRANT SELECT ON public.ai_summary_costs, public.ai_cost_by_account, public.ai_cost_daily,
                 public.account_ai_summary_run_report TO authenticated, service_role;
+
 -- ─── Queue functions (service role only) ──────────────────────────────────────
 
 -- The activity window of a Montreal date's run: up to 1 AM that day, from the
@@ -345,6 +372,7 @@ BEGIN
   RETURN QUERY SELECT v_start, v_end;
 END
 $$;
+
 -- Opens the run of a Montreal date, or reopens it when its detection failed or
 -- stalled. `started` is false when the run already exists and is not retried.
 CREATE OR REPLACE FUNCTION public.account_ai_summary_start_run(p_local_date DATE)
@@ -390,6 +418,7 @@ BEGIN
   WHERE r.local_date = p_local_date;
 END
 $$;
+
 -- Queues the accounts a run found, at most p_limit, most recent activity first.
 -- An account is skipped when a summary started after its ready_at already exists
 -- (it includes the activity) or when an earlier run still holds it in the queue.
@@ -466,6 +495,7 @@ BEGIN
   RETURN v_counts;
 END
 $$;
+
 -- Claims the next queued summary that is due, or returns no row. At most
 -- p_max_running nightly generations run at once; claims are serialised so the
 -- cap holds. Expires generations interrupted by the function's wall clock first:
@@ -540,6 +570,7 @@ BEGIN
   END LOOP;
 END
 $$;
+
 REVOKE ALL ON FUNCTION public.account_ai_summary_window(DATE) FROM PUBLIC, anon, authenticated;
 REVOKE ALL ON FUNCTION public.account_ai_summary_start_run(DATE) FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.account_ai_summary_window(DATE) TO service_role;
@@ -548,6 +579,7 @@ REVOKE ALL ON FUNCTION public.account_ai_summary_claim(INTEGER, INTEGER) FROM PU
 GRANT EXECUTE ON FUNCTION public.account_ai_summary_start_run(DATE) TO service_role;
 GRANT EXECUTE ON FUNCTION public.account_ai_summary_enqueue(BIGINT, JSONB, INTEGER) TO service_role;
 GRANT EXECUTE ON FUNCTION public.account_ai_summary_claim(INTEGER, INTEGER) TO service_role;
+
 -- ─── Cron entry points ────────────────────────────────────────────────────────
 
 -- Posts { action } to account-summary with the key from Vault. Returns false
@@ -573,6 +605,7 @@ BEGIN
   RETURN true;
 END
 $$;
+
 -- pg_cron runs in UTC, so the job fires at 05:00 and 06:00 UTC and only the one
 -- that falls at 1 AM in Montreal (EDT or EST) posts. On the night clocks fall
 -- back both do; the run is unique per date, so the second is a no-op.
@@ -588,6 +621,7 @@ BEGIN
   RETURN public.account_ai_summary_post('nightly');
 END
 $$;
+
 -- Starts workers for the queue, up to p_max_running at once. Posts nothing when
 -- no queued summary is due and nothing is stuck running, so an idle minute costs
 -- one query. A generation running for over 7 minutes was interrupted: it does not
@@ -624,9 +658,11 @@ BEGIN
   RETURN GREATEST(v_n, 0);
 END
 $$;
+
 REVOKE ALL ON FUNCTION public.account_ai_summary_post(TEXT) FROM PUBLIC, anon, authenticated;
 REVOKE ALL ON FUNCTION public.account_ai_summary_nightly_tick() FROM PUBLIC, anon, authenticated;
 REVOKE ALL ON FUNCTION public.account_ai_summary_dispatch(INTEGER) FROM PUBLIC, anon, authenticated;
+
 DO $do$
 BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'pg_cron') THEN

@@ -581,6 +581,15 @@ Three things about the Comptes module that are not obvious:
   The detail table filters `zoho_accounts_enriched.is_internal` instead, because
   PostgREST's `rating=not.in.(…)` is NULL — not TRUE — for the 977 unrated rows
   and would silently hide them.
+- **Rating is shown in French and filtered on the stored value.** The
+  "Évaluation" filter (`?evaluation=`, `p_ratings` on the Comptes RPCs, `rating=in.(…)`
+  on the view) ANDs with Statut, which stays a plain switch. `zoho_accounts.rating`
+  holds what the sync's English login reads, and five options read differently in
+  Zoho's French UI: `Client à reprendre` is "Compte sans représentant associé",
+  `Actif` is "Actif : Client avec une tâche de suivi en cours", and so on.
+  `src/lib/accountRating.ts` maps one to the other for the dropdown, the detail
+  column and the CSV. It copies the fr_FR Translations export of 2026-09-29 and
+  nothing syncs it: a French label renamed in Zoho has to be renamed there too.
 
 **Royer & Fils / VotreLogo.ca is a different company's revenue.** Measured
 2026-09-07: `SUM(Ventes_totales_2022_2026)` is $5,530,878.34 across all 20,645
@@ -712,6 +721,83 @@ those two channels. Setup and credentials: **`docs/ADVERTISING.md`**.
 - **Open cohorts.** A month's revenue keeps accruing until its attribution window closes. Every
   RPC returns `window_ends_on`; `isCohortOpen()` in `components/advertising/channel.ts` marks those
   figures as provisional. Do not remove it — the most recent month is always open.
+
+### AI account summaries: nightly run and model costs
+
+The `account-summary` function writes the "Résumé IA du compte" card behind the Zoho widget
+(migrations `20261012180000_account_ai_summaries.sql`, `20261019180000_account_summary_nightly_costs.sql`).
+The model is **GLM-5.3 through OpenRouter** at reasoning effort `high`, with a strict JSON schema
+(`openrouter.ts`, `model.ts`). Providers are tried in the order Parasail, Fireworks, Nebius, with
+`data_collection: deny` and `max_price` at the list price ($1.40 / $4.40 per M), because a provider
+slug also matches its dearer `/fast` variant. Nebius is last: it bills cached prompt tokens at the
+full price.
+
+- **Two triggers, one table.** A click in the widget (`trigger = 'manual'`) and the 1 AM run
+  (`'nightly'`) both write `account_ai_summaries`. Night rows go `queued → running → done | failed`,
+  or `skipped` (`fresh`, `already_queued`, `limit`). The widget shows the latest `done` row by
+  `started_at` (when the data was read), never by `created_at`, which is queue time for a night row,
+  and reports failures of manual clicks only.
+- **1 AM Montreal, in UTC cron.** `account-summary-nightly` fires at 05:00 and 06:00 UTC and only the
+  one that falls at 1 AM local posts; runs are unique per `local_date`. The window runs from the end
+  of the last successful run (`account_ai_summary_window`), so a failed night is covered by the next.
+  `account-summary-worker-1m` starts at most 3 concurrent generations, 6 accounts per worker. Both
+  jobs read the key from the Vault secret **`account_summary_key`**: without it they post nothing.
+- **What counts as activity** (`activity.ts`): notes, tasks created or closed (automated ones too),
+  meetings booked or held, contacts and accounts created, Books quotes and invoices modified.
+  Internal and supplier accounts are left out; at most `SUMMARY_NIGHTLY_LIMIT` (1500) a night.
+  Emails and calls are not detected. A Books record's `last_modified_time` moves on every edit, so
+  replaying an old window misses records edited since; only the live run is complete.
+- **Skipped when already fresh.** An account is queued only if no summary started after its
+  `ready_at`: the last activity plus the mirror lag of its kind (10 min for invoices, 130 min for new
+  contacts and accounts, which the summary reads from the mirror). The claim checks again, so a rep's
+  click between 1 AM and the worker saves the call.
+- **Each listed invoice goes in whole** (`gather.ts`, migration `20261022120000_invoice_details.sql`).
+  The invoices the dossier lists one by one (`listedInvoices`: the last 12 months, every overdue
+  one, the last invoice) carry their Books document under the summary line: lines with their
+  descriptions, totals, payment, who it was sent to, notes and terms, plus the Books customer's own
+  fields once. The mirror has none of it and the detail endpoint is one call per document, so
+  `invoice_details` (admins read) caches what was read; a document is read again when the mirror's
+  status or amount moved, when an unpaid one's copy is a day old, or when `DETAIL_FORMAT` is raised.
+  Reads are paced at 20 per org per minute per function instance and stop after 40 s; the rest keep
+  their summary line until the next generation, so a big account is complete after a run or two.
+  Without the table every document is read each time. The prompt carries at most 80,000 characters
+  of documents, the oldest left out first. Quotes still carry their list fields only.
+- **Every model attempt is a row of `ai_model_calls`**, failed ones included (they are billed). The
+  authoritative figure is `cost_usd` (OpenRouter's `usage.cost`); the `cost_*` columns split it with
+  the serving provider's list prices, and `cost_computed_usd` equals `cost_usd` exactly unless a
+  provider discounts. Reasoning tokens are part of `completion_tokens`, billed at the output price.
+  Views, admin-only: `ai_summary_costs` (per generation), `ai_cost_by_account`, `ai_cost_daily`
+  (Montreal day × trigger), `account_ai_summary_run_report`.
+- GLM writes the current year into dates ("7 mai 2026"); `dropCurrentYear` in `clean.ts` restores
+  the card's style. A bare `SUMMARY_MODEL` (no `vendor/`) is a leftover Anthropic id and is ignored.
+- **Next steps are actions** (`card.ts`, migration `20261020180000_account_summary_refresh_and_crm_fields.sql`):
+  `create_task`, `close_task`, `update_task` on an open rep task [T…], `decline_quote` on an open
+  quote, `revise_quote` on an open or draft quote [D…]. A step naming a record the dossier does not
+  offer for that action (an automatic task, a quote already decided) is dropped, never guessed. Task
+  actions run in the widget as the signed-in user; a decline goes through the function
+  (`quote_decline`), which re-reads the quote's status in Books first. Declining in Books moves the
+  CRM Potential to "Perdu" by itself (Books' own sync, within seconds).
+- **Every citation opens what it names** (`SourceRef` in `prompt.ts`): a quote, invoice or credit
+  note its Books page (`#/creditnotes/` for a credit note, whose id is what `invoices.zoho_id` holds
+  for an `is_avoir` row), a task, meeting or contact its CRM record. Zoho has no page for a single
+  note and shows an email only from its contact, so the card stores what the model read of each
+  cited note and email (`preview`) and the widget shows it in place, with a link to the record it
+  sits on. The computed facts end with the [ids] of the records they rest on (last invoice, latest
+  and open quotes, last exchanges, overdue invoices), so a point cites those rather than A1; A1
+  ("fiche") is this page and is not a link. Cards written before 2026-10-21 have no `preview`:
+  their note chips open the record the note sits on.
+- **The card is copied onto the Zoho account** (`crm.ts`): six custom Accounts fields (temperature,
+  its reason, first next step, date, open quotes and overdue before tax), written after every
+  summary with `trigger: []` so no workflow fires, by the summary token (it alone has write scopes:
+  Accounts update, Books estimates create/update). The API names are constants in `crm.ts`; a
+  field missing in Zoho fails the write, which is stored on the row (`crm_error`) and retried at
+  night (`push_crm`). `SUMMARY_CRM_FIELDS=off` stops the writes.
+- **A card goes stale by date** (`refresh_at`, `refreshDays` in `prompt.ts`): an open quote passing 30
+  days or expiring, an invoice falling due or passing 30 days late, the last purchase or real
+  exchange leaving its window. None of these modifies a record, so activity detection misses them;
+  the 1 AM run also queues accounts whose latest card reached its `refresh_at`
+  (`account_ai_summary_expired`, `temperature_expired` in the run's detection). The mirror holds no
+  invoice due dates: unpaid ones are assumed net 30.
 
 ### Leads: which table is which
 

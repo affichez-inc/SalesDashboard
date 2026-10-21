@@ -85,5 +85,7 @@ AS $$
 $$;
 
 GRANT ALL ON FUNCTION public.get_inv_weekly_detail(date, text, text, text) TO anon;
+
 GRANT ALL ON FUNCTION public.get_inv_weekly_detail(date, text, text, text) TO authenticated;
+
 GRANT ALL ON FUNCTION public.get_inv_weekly_detail(date, text, text, text) TO service_role;

@@ -36,14 +36,19 @@ ALTER TABLE public.sales
 
 COMMENT ON COLUMN public.invoices.total_incl_tax IS
   'Zoho total, taxes included. Negative on a credit note, like amount.';
+
 COMMENT ON COLUMN public.invoices.tax_total IS
   'Zoho tax_total (detail payload), same sign as total_incl_tax. amount = total_incl_tax - tax_total.';
+
 COMMENT ON COLUMN public.invoices.tax_checked_total IS
   'The total_incl_tax that tax_total was read against. When it differs, amount is an estimate and the row is queued for a detail read.';
+
 COMMENT ON COLUMN public.sales.total_incl_tax IS
   'Zoho estimate total, taxes included.';
+
 COMMENT ON COLUMN public.sales.tax_total IS
   'Zoho tax_total (estimate detail payload). amount = total_incl_tax - tax_total.';
+
 COMMENT ON COLUMN public.sales.tax_checked_total IS
   'The total_incl_tax that tax_total was read against. When it differs, amount is an estimate and the row is queued for a detail read.';
 
@@ -69,20 +74,22 @@ END;
 $$;
 
 DROP TRIGGER IF EXISTS invoices_pretax_amount_trg ON public.invoices;
+
 CREATE TRIGGER invoices_pretax_amount_trg
   BEFORE INSERT OR UPDATE ON public.invoices
   FOR EACH ROW EXECUTE FUNCTION public.zoho_pretax_amount();
 
 DROP TRIGGER IF EXISTS sales_pretax_amount_trg ON public.sales;
+
 CREATE TRIGGER sales_pretax_amount_trg
   BEFORE INSERT OR UPDATE ON public.sales
   FOR EACH ROW EXECUTE FUNCTION public.zoho_pretax_amount();
-
 
 -- Why a detail read failed (404: gone from Zoho). A row carrying one leaves the
 -- queue, so a dead record does not cost an API call on every run for ever; the
 -- hourly reconcile in zoho-invoice-sync is what removes dead invoices.
 ALTER TABLE public.invoices ADD COLUMN IF NOT EXISTS pretax_error text;
+
 ALTER TABLE public.sales    ADD COLUMN IF NOT EXISTS pretax_error text;
 
 -- The back-fill queue for zoho-pretax-sync: one office, invoices, credit notes
@@ -114,6 +121,7 @@ AS $$
 $$;
 
 REVOKE ALL ON FUNCTION public.get_pretax_queue(text, integer) FROM PUBLIC, anon, authenticated;
+
 GRANT EXECUTE ON FUNCTION public.get_pretax_queue(text, integer) TO service_role;
 
 CREATE INDEX IF NOT EXISTS invoices_pretax_pending_idx
@@ -156,4 +164,5 @@ AS $$
 $$;
 
 REVOKE ALL ON FUNCTION public.get_pretax_backfill_status() FROM PUBLIC, anon;
+
 GRANT EXECUTE ON FUNCTION public.get_pretax_backfill_status() TO authenticated, service_role;

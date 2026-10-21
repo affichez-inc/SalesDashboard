@@ -24,6 +24,7 @@
 -- so the planner still inlines it (CLAUDE.md, performance rule 1).
 
 DROP FUNCTION IF EXISTS public.zoho_accounts_scoped(p_year integer, p_month integer, p_rep text, p_source text, p_service text, p_domaine text, p_region text, p_exclude_ratings text[], p_reps text[], p_sources text[], p_services text[], p_domaines text[], p_regions text[]);
+
 CREATE OR REPLACE FUNCTION public.zoho_accounts_scoped(p_year integer DEFAULT NULL::integer, p_month integer DEFAULT NULL::integer, p_rep text DEFAULT NULL::text, p_source text DEFAULT NULL::text, p_service text DEFAULT NULL::text, p_domaine text DEFAULT NULL::text, p_region text DEFAULT NULL::text, p_exclude_ratings text[] DEFAULT ARRAY['Compte interne : Ne pas reprendre'::text, 'Fournisseur'::text], p_reps text[] DEFAULT NULL::text[], p_sources text[] DEFAULT NULL::text[], p_services text[] DEFAULT NULL::text[], p_domaines text[] DEFAULT NULL::text[], p_regions text[] DEFAULT NULL::text[], p_ratings text[] DEFAULT NULL::text[])
  RETURNS TABLE(zoho_account_id text, account_name text, created_time timestamp with time zone, created_date date, rep_name text, origine_du_client text, service_interest text[], domaine_activite text, region_administrative text, rating text, is_bulk_import boolean, ventes_totales numeric)
  LANGUAGE sql
@@ -73,9 +74,13 @@ AS $function$
     -- Any of the selected ratings, by the stored (English-session) value. NULL is
     -- no filter; an account with no rating matches no list.
     AND (p_ratings IS NULL OR a.rating = ANY(p_ratings));
-$function$;
+$function$
+;
+
 GRANT EXECUTE ON FUNCTION public.zoho_accounts_scoped(p_year integer, p_month integer, p_rep text, p_source text, p_service text, p_domaine text, p_region text, p_exclude_ratings text[], p_reps text[], p_sources text[], p_services text[], p_domaines text[], p_regions text[], p_ratings text[]) TO authenticated, service_role;
+
 DROP FUNCTION IF EXISTS public.get_zoho_account_kpis(p_year integer, p_month integer, p_rep text, p_source text, p_service text, p_domaine text, p_region text, p_window_months integer, p_exclude_ratings text[], p_reps text[], p_sources text[], p_services text[], p_domaines text[], p_regions text[]);
+
 CREATE OR REPLACE FUNCTION public.get_zoho_account_kpis(p_year integer DEFAULT NULL::integer, p_month integer DEFAULT NULL::integer, p_rep text DEFAULT NULL::text, p_source text DEFAULT NULL::text, p_service text DEFAULT NULL::text, p_domaine text DEFAULT NULL::text, p_region text DEFAULT NULL::text, p_window_months integer DEFAULT 12, p_exclude_ratings text[] DEFAULT ARRAY['Compte interne : Ne pas reprendre'::text, 'Fournisseur'::text], p_reps text[] DEFAULT NULL::text[], p_sources text[] DEFAULT NULL::text[], p_services text[] DEFAULT NULL::text[], p_domaines text[] DEFAULT NULL::text[], p_regions text[] DEFAULT NULL::text[], p_ratings text[] DEFAULT NULL::text[])
  RETURNS TABLE(accounts_created bigint, accounts_invoiced bigint, invoiced_rate numeric, revenue_attributed numeric, revenue_lifetime numeric, revenue_per_account numeric, avg_days_to_first_invoice numeric, ventes_royer numeric)
  LANGUAGE sql
@@ -116,9 +121,13 @@ AS $function$
     ROUND(AVG(p.first_inv - p.created_date) FILTER (WHERE p.first_inv IS NOT NULL), 1),
     COALESCE(sum(p.ventes_totales), 0)
   FROM per_acct p;
-$function$;
+$function$
+;
+
 GRANT EXECUTE ON FUNCTION public.get_zoho_account_kpis(p_year integer, p_month integer, p_rep text, p_source text, p_service text, p_domaine text, p_region text, p_window_months integer, p_exclude_ratings text[], p_reps text[], p_sources text[], p_services text[], p_domaines text[], p_regions text[], p_ratings text[]) TO authenticated, service_role;
+
 DROP FUNCTION IF EXISTS public.get_zoho_accounts_by_rep(p_year integer, p_month integer, p_source text, p_service text, p_domaine text, p_region text, p_window_months integer, p_exclude_ratings text[], p_reps text[], p_sources text[], p_services text[], p_domaines text[], p_regions text[]);
+
 CREATE OR REPLACE FUNCTION public.get_zoho_accounts_by_rep(p_year integer DEFAULT NULL::integer, p_month integer DEFAULT NULL::integer, p_source text DEFAULT NULL::text, p_service text DEFAULT NULL::text, p_domaine text DEFAULT NULL::text, p_region text DEFAULT NULL::text, p_window_months integer DEFAULT 12, p_exclude_ratings text[] DEFAULT ARRAY['Compte interne : Ne pas reprendre'::text, 'Fournisseur'::text], p_reps text[] DEFAULT NULL::text[], p_sources text[] DEFAULT NULL::text[], p_services text[] DEFAULT NULL::text[], p_domaines text[] DEFAULT NULL::text[], p_regions text[] DEFAULT NULL::text[], p_ratings text[] DEFAULT NULL::text[])
  RETURNS TABLE(label text, nb_accounts bigint, nb_invoiced bigint, total_amount numeric, revenue_per_account numeric, is_bulk_import boolean)
  LANGUAGE sql
@@ -149,9 +158,13 @@ AS $function$
   FROM per_acct p
   GROUP BY p.label
   ORDER BY 4 DESC, 2 DESC;
-$function$;
+$function$
+;
+
 GRANT EXECUTE ON FUNCTION public.get_zoho_accounts_by_rep(p_year integer, p_month integer, p_source text, p_service text, p_domaine text, p_region text, p_window_months integer, p_exclude_ratings text[], p_reps text[], p_sources text[], p_services text[], p_domaines text[], p_regions text[], p_ratings text[]) TO authenticated, service_role;
+
 DROP FUNCTION IF EXISTS public.get_zoho_accounts_by_source(p_year integer, p_month integer, p_rep text, p_service text, p_domaine text, p_region text, p_window_months integer, p_exclude_ratings text[], p_reps text[], p_services text[], p_domaines text[], p_regions text[]);
+
 CREATE OR REPLACE FUNCTION public.get_zoho_accounts_by_source(p_year integer DEFAULT NULL::integer, p_month integer DEFAULT NULL::integer, p_rep text DEFAULT NULL::text, p_service text DEFAULT NULL::text, p_domaine text DEFAULT NULL::text, p_region text DEFAULT NULL::text, p_window_months integer DEFAULT 12, p_exclude_ratings text[] DEFAULT ARRAY['Compte interne : Ne pas reprendre'::text, 'Fournisseur'::text], p_reps text[] DEFAULT NULL::text[], p_services text[] DEFAULT NULL::text[], p_domaines text[] DEFAULT NULL::text[], p_regions text[] DEFAULT NULL::text[], p_ratings text[] DEFAULT NULL::text[])
  RETURNS TABLE(label text, nb_accounts bigint, nb_invoiced bigint, total_amount numeric, revenue_per_account numeric, is_bulk_import boolean)
  LANGUAGE sql
@@ -183,9 +196,13 @@ AS $function$
   FROM per_acct p
   GROUP BY p.label
   ORDER BY 4 DESC, 2 DESC;
-$function$;
+$function$
+;
+
 GRANT EXECUTE ON FUNCTION public.get_zoho_accounts_by_source(p_year integer, p_month integer, p_rep text, p_service text, p_domaine text, p_region text, p_window_months integer, p_exclude_ratings text[], p_reps text[], p_services text[], p_domaines text[], p_regions text[], p_ratings text[]) TO authenticated, service_role;
+
 DROP FUNCTION IF EXISTS public.get_zoho_accounts_by_service(p_year integer, p_month integer, p_rep text, p_source text, p_domaine text, p_region text, p_window_months integer, p_exclude_ratings text[], p_reps text[], p_sources text[], p_domaines text[], p_regions text[]);
+
 CREATE OR REPLACE FUNCTION public.get_zoho_accounts_by_service(p_year integer DEFAULT NULL::integer, p_month integer DEFAULT NULL::integer, p_rep text DEFAULT NULL::text, p_source text DEFAULT NULL::text, p_domaine text DEFAULT NULL::text, p_region text DEFAULT NULL::text, p_window_months integer DEFAULT 12, p_exclude_ratings text[] DEFAULT ARRAY['Compte interne : Ne pas reprendre'::text, 'Fournisseur'::text], p_reps text[] DEFAULT NULL::text[], p_sources text[] DEFAULT NULL::text[], p_domaines text[] DEFAULT NULL::text[], p_regions text[] DEFAULT NULL::text[], p_ratings text[] DEFAULT NULL::text[])
  RETURNS TABLE(label text, nb_accounts bigint, nb_invoiced bigint, total_amount numeric, revenue_per_account numeric, is_bulk_import boolean)
  LANGUAGE sql
@@ -222,9 +239,13 @@ AS $function$
   FROM per_acct p
   GROUP BY p.label
   ORDER BY 4 DESC, 2 DESC;
-$function$;
+$function$
+;
+
 GRANT EXECUTE ON FUNCTION public.get_zoho_accounts_by_service(p_year integer, p_month integer, p_rep text, p_source text, p_domaine text, p_region text, p_window_months integer, p_exclude_ratings text[], p_reps text[], p_sources text[], p_domaines text[], p_regions text[], p_ratings text[]) TO authenticated, service_role;
+
 DROP FUNCTION IF EXISTS public.get_zoho_accounts_by_domaine(p_year integer, p_month integer, p_rep text, p_source text, p_service text, p_region text, p_window_months integer, p_exclude_ratings text[], p_reps text[], p_sources text[], p_services text[], p_regions text[]);
+
 CREATE OR REPLACE FUNCTION public.get_zoho_accounts_by_domaine(p_year integer DEFAULT NULL::integer, p_month integer DEFAULT NULL::integer, p_rep text DEFAULT NULL::text, p_source text DEFAULT NULL::text, p_service text DEFAULT NULL::text, p_region text DEFAULT NULL::text, p_window_months integer DEFAULT 12, p_exclude_ratings text[] DEFAULT ARRAY['Compte interne : Ne pas reprendre'::text, 'Fournisseur'::text], p_reps text[] DEFAULT NULL::text[], p_sources text[] DEFAULT NULL::text[], p_services text[] DEFAULT NULL::text[], p_regions text[] DEFAULT NULL::text[], p_ratings text[] DEFAULT NULL::text[])
  RETURNS TABLE(label text, nb_accounts bigint, nb_invoiced bigint, total_amount numeric, revenue_per_account numeric, is_bulk_import boolean)
  LANGUAGE sql
@@ -255,9 +276,13 @@ AS $function$
   FROM per_acct p
   GROUP BY p.label
   ORDER BY 4 DESC, 2 DESC;
-$function$;
+$function$
+;
+
 GRANT EXECUTE ON FUNCTION public.get_zoho_accounts_by_domaine(p_year integer, p_month integer, p_rep text, p_source text, p_service text, p_region text, p_window_months integer, p_exclude_ratings text[], p_reps text[], p_sources text[], p_services text[], p_regions text[], p_ratings text[]) TO authenticated, service_role;
+
 DROP FUNCTION IF EXISTS public.get_zoho_accounts_monthly_summary(p_year integer, p_rep text, p_source text, p_service text, p_domaine text, p_region text, p_window_months integer, p_exclude_ratings text[], p_reps text[], p_sources text[], p_services text[], p_domaines text[], p_regions text[]);
+
 CREATE OR REPLACE FUNCTION public.get_zoho_accounts_monthly_summary(p_year integer DEFAULT NULL::integer, p_rep text DEFAULT NULL::text, p_source text DEFAULT NULL::text, p_service text DEFAULT NULL::text, p_domaine text DEFAULT NULL::text, p_region text DEFAULT NULL::text, p_window_months integer DEFAULT 12, p_exclude_ratings text[] DEFAULT ARRAY['Compte interne : Ne pas reprendre'::text, 'Fournisseur'::text], p_reps text[] DEFAULT NULL::text[], p_sources text[] DEFAULT NULL::text[], p_services text[] DEFAULT NULL::text[], p_domaines text[] DEFAULT NULL::text[], p_regions text[] DEFAULT NULL::text[], p_ratings text[] DEFAULT NULL::text[])
  RETURNS TABLE(month integer, nb_accounts bigint, nb_invoiced bigint, total_amount numeric, revenue_per_account numeric)
  LANGUAGE sql
@@ -292,5 +317,7 @@ AS $function$
   FROM generate_series(1, 12) AS g(m)
   LEFT JOIN agg a ON a.m = g.m
   ORDER BY g.m;
-$function$;
+$function$
+;
+
 GRANT EXECUTE ON FUNCTION public.get_zoho_accounts_monthly_summary(p_year integer, p_rep text, p_source text, p_service text, p_domaine text, p_region text, p_window_months integer, p_exclude_ratings text[], p_reps text[], p_sources text[], p_services text[], p_domaines text[], p_regions text[], p_ratings text[]) TO authenticated, service_role;

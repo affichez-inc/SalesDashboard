@@ -20,6 +20,7 @@ import { formatCurrencyCAD, cn } from '../lib/utils';
 import type { CsvColumn } from '../lib/csv';
 import { RepAvatar } from '../components/RepAvatar';
 import { useRepTeam, mergeInternalRows, INTERNAL_LABEL } from '../lib/repTeam';
+import { INTERNAL_RATINGS, ratingOptions, ratingsInScope } from '../lib/accountRating';
 
 /**
  * Comptes - tableau de bord.
@@ -48,7 +49,7 @@ import { useRepTeam, mergeInternalRows, INTERNAL_LABEL } from '../lib/repTeam';
  *  (Hydro-Québec) alone carries six figures on an internal rating and would
  *  otherwise sit at the top of every list. The Statut filter switches them back
  *  on - the data layer keeps every account. */
-const DEFAULT_EXCLUDED_RATINGS = ['Compte interne : Ne pas reprendre', 'Fournisseur'];
+const DEFAULT_EXCLUDED_RATINGS = INTERNAL_RATINGS;
 
 const WINDOW_OPTIONS = [
     { value: '3',      label: '3 mois après' },
@@ -76,6 +77,12 @@ export default function AccountsDashboard() {
     const [windowParam, setWindowParam] = useUrlState('fenetre', '12');
     // 'Tous' means show the internal and supplier accounts too.
     const [ratingScope, setRatingScope] = useUrlState('statut', 'Clients');
+    // Zoho's Rating ("Évaluation"), by stored value. ANDs with Statut above.
+    const [selectedRatings, setSelectedRatings] = useUrlList('evaluation');
+    const ratings = useMemo(
+        () => ratingsInScope(selectedRatings, ratingScope === 'Tous'),
+        [selectedRatings, ratingScope],
+    );
 
     const [loading, setLoading] = useState(true);
     const [kpis, setKpis] = useState<ZohoAccountKPIs | null>(null);
@@ -108,7 +115,7 @@ export default function AccountsDashboard() {
     const clearFilters = () => {
         _setYearParam('2026', {
             month: null, rep: null, source: null, service: null,
-            domaine: null, region: null, fenetre: null, statut: null,
+            domaine: null, region: null, fenetre: null, statut: null, evaluation: null,
         });
     };
 
@@ -122,6 +129,7 @@ export default function AccountsDashboard() {
         selectedRegions.length > 0,
         windowParam !== '12',
         ratingScope !== 'Clients',
+        ratings.length > 0,
     ].filter(Boolean).length;
 
     const fetchData = useCallback(async () => {
@@ -132,6 +140,9 @@ export default function AccountsDashboard() {
             p_window_months: windowMonths,
             p_exclude_ratings: excludeRatings,
             p_regions: selectedRegions.length > 0 ? selectedRegions : null,
+            // Sent only when set, so every call without it is one a database
+            // that predates the parameter still answers.
+            ...(ratings.length > 0 ? { p_ratings: ratings } : {}),
         };
         const rep = repFilter.rep;
         const reps = repFilter.reps;
@@ -150,6 +161,7 @@ export default function AccountsDashboard() {
             p_rep: rep, p_reps: reps, p_sources: sources, p_services: services,
             p_domaines: domaines, p_regions: shared.p_regions,
             p_window_months: shared.p_window_months, p_exclude_ratings: shared.p_exclude_ratings,
+            ...(ratings.length > 0 ? { p_ratings: ratings } : {}),
         };
 
         const [
@@ -185,7 +197,7 @@ export default function AccountsDashboard() {
         setMonthlyPrev((monPrevData as ZohoAccountMonthlyRow[]) ?? []);
         setLoading(false);
     }, [yearParamValue, selectedMonth, repFilter, selectedSources, selectedServices,
-        selectedDomaines, selectedRegions, windowMonths, excludeRatings]);
+        selectedDomaines, selectedRegions, windowMonths, excludeRatings, ratings]);
 
     const fetchOptions = useCallback(async () => {
         const { data } = await cachedRpc<ZohoAccountFilterOptions>('get_zoho_account_filter_options', {
@@ -311,6 +323,11 @@ export default function AccountsDashboard() {
                             { value: 'Tous',    label: 'Inclure comptes internes' },
                         ]}
                     />
+                </FilterGroup>
+                <FilterGroup label="Évaluation">
+                    <MultiSelect values={ratings} onChange={setSelectedRatings}
+                                 options={ratingOptions(options?.ratings, ratingScope === 'Tous')}
+                                 allLabel="Toutes les évaluations" className="w-52" />
                 </FilterGroup>
                 <ClearFiltersButton activeCount={activeFilterCount} onClear={clearFilters} />
             </FilterBar>

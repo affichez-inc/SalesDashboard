@@ -79,6 +79,8 @@ export type InvDetailRow = {
     status: 'sent' | 'viewed' | 'paid' | 'partial' | 'overdue' | 'void' | 'avoir';
     is_avoir: boolean;
     zoho_id: string;
+    /** Zoho's shipping charge before tax, already inside `amount`. Null until read from Zoho. */
+    shipping_charge: number | null;
 };
 
 /**

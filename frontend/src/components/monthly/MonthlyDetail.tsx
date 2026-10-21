@@ -6,6 +6,7 @@ import {
 } from 'lucide-react';
 import { formatCurrencyCAD, cn } from '../../lib/utils';
 import { DEPARTMENTS } from '../../lib/constants';
+import { ShippingNote } from '../ShippingNote';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -19,6 +20,8 @@ interface InvoiceRow {
     rep_name: string | null;
     status: string;
     is_avoir: boolean;
+    /** Zoho's shipping before tax, already inside amount. Shown on the line only. */
+    shipping_charge: number | null;
 }
 
 interface SaleRow {
@@ -114,7 +117,7 @@ export function MonthlyDetail({
         if (module === 'factures') {
             let q = supabase
                 .from('invoices')
-                .select('zoho_id,invoice_number,invoice_date,client_name,amount,department,rep_name,status,is_avoir')
+                .select('zoho_id,invoice_number,invoice_date,client_name,amount,department,rep_name,status,is_avoir,shipping_charge')
                 .gte('invoice_date', dateStart)
                 .lt('invoice_date', dateEnd)
                 .order('invoice_date', { ascending: true });
@@ -370,6 +373,7 @@ export function MonthlyDetail({
                                             </td>
                                             <td className={cn("px-4 py-2.5 text-right font-bold tabular-nums", avoir ? "text-tone-critical-ink" : "text-ink")}>
                                                 {formatCurrencyCAD(r.amount)}
+                                                {!isSaleRow(r) && <ShippingNote amount={(r as InvoiceRow).shipping_charge} className="mt-0.5" />}
                                             </td>
                                             <td className="px-4 py-2.5">
                                                 <span className={cn("text-xs font-mono font-semibold", avoir ? "text-tone-critical" : "text-ink-mute")}>

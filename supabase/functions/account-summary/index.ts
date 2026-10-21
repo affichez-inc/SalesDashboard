@@ -131,6 +131,15 @@ const db: Db = {
     if (!res.ok) throw new Error(`Lecture ${table} impossible : ${res.status} ${await res.text()}`);
     return await res.json() as T[];
   },
+  async upsert(table: string, rows: Array<Record<string, unknown>>) {
+    if (rows.length === 0) return;
+    const res = await fetch(`${REST}/${table}`, {
+      method: 'POST',
+      headers: { ...SB_HEADERS, Prefer: 'resolution=merge-duplicates,return=minimal' },
+      body: JSON.stringify(rows),
+    });
+    if (!res.ok) throw new Error(`Écriture ${table} impossible : ${res.status} ${await res.text()}`);
+  },
 };
 
 async function rpc<T>(name: string, args: Record<string, unknown>): Promise<T> {

@@ -708,6 +708,17 @@ full price.
   `ready_at`: the last activity plus the mirror lag of its kind (10 min for invoices, 130 min for new
   contacts and accounts, which the summary reads from the mirror). The claim checks again, so a rep's
   click between 1 AM and the worker saves the call.
+- **Each listed invoice goes in whole** (`gather.ts`, migration `20261022120000_invoice_details.sql`).
+  The invoices the dossier lists one by one (`listedInvoices`: the last 12 months, every overdue
+  one, the last invoice) carry their Books document under the summary line: lines with their
+  descriptions, totals, payment, who it was sent to, notes and terms, plus the Books customer's own
+  fields once. The mirror has none of it and the detail endpoint is one call per document, so
+  `invoice_details` (admins read) caches what was read; a document is read again when the mirror's
+  status or amount moved, when an unpaid one's copy is a day old, or when `DETAIL_FORMAT` is raised.
+  Reads are paced at 20 per org per minute per function instance and stop after 40 s; the rest keep
+  their summary line until the next generation, so a big account is complete after a run or two.
+  Without the table every document is read each time. The prompt carries at most 80,000 characters
+  of documents, the oldest left out first. Quotes still carry their list fields only.
 - **Every model attempt is a row of `ai_model_calls`**, failed ones included (they are billed). The
   authoritative figure is `cost_usd` (OpenRouter's `usage.cost`); the `cost_*` columns split it with
   the serving provider's list prices, and `cost_computed_usd` equals `cost_usd` exactly unless a

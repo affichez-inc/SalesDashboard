@@ -190,18 +190,18 @@ and the filter lives thousands of lines away from the SQL that aggregates it, so
 it is invisible from the query. The one that has already produced a wrong number
 on screen:
 
-> **`sales` holds only quotes that were WON.** `accepted` and `invoiced`, plus
-> `declined` *only when the quote was accepted first*. Quotes that were sent,
-> drafted or expired are **never written at all** — the sync inserts only on
-> `accepted`/`invoiced`/`paid` (`zoho-sync/index.ts:316`) and merely PATCHes
-> existing rows on decline (`:343`). Verified: 8,085 rows, 0 of them `sent`,
-> `draft` or `expired`; Zoho's QC org alone holds 3,000+ expired and 1,500+
-> declined that the database has never seen.
+> **`sales` is every quote, but not over the same years.** Since 2026-09-18
+> (`20260918220000_quotes_foundation.sql`, `QUOTES_STORE_ALL_STATUSES` in
+> `zoho-sync`) it holds won quotes (`accepted`, `invoiced`) of every year and
+> `draft`, `sent`, `declined` and `expired` ones **from 2025-01-01 only**
+> (`BACKFILL_START`). Before that day it held won quotes only, which is why the
+> Créé par `Taux` once read 92% (the real figure for 2026 is 48%).
 
-So **you cannot compute a closing rate, win rate or conversion rate from
-`sales`** — the losing quotes are not in there. The Créé par page's `Taux` shows
-92% for this reason; the real figure is at most ~58%. Fixing it means changing
-the sync, not the SQL.
+So a revenue figure must name its statuses (every revenue RPC filters
+`accepted`/`invoiced` explicitly since `20260918180000`), and a closing rate is
+only meaningful from 2025 on, by `quote_date` (issue date). `sale_date` is the
+acceptance date with a fallback to the issue date when the quote was never
+accepted; `quote_date` is NULL on won rows older than 2025.
 
 Before adding or changing any statistic, the non-negotiables:
 
@@ -887,6 +887,8 @@ the table would just be overwritten by the next sync.
 | `/publicite` | `Advertising` | Publicité section. Google Ads + Meta spend against the revenue of the accounts tagged to each, in three views (payant, organique, Google inconnu). Channel-level and monthly, never per lead |
 | `/` | `Dashboard` | Devis section. YTD KPIs, rep leaderboard, top clients, monthly targets. Without the section, `/` redirects to the first section the user has |
 | `/weekly` | `WeeklyDetail` | Week-by-week sales breakdown (pivot + line items) |
+| `/devis/tous` | `AllQuotes` | Devis section. Every quote in `sales`, any status, searchable by client or number, paginated server-side. Reads the table directly (RLS gates it) |
+| `/factures/tous` | `AllInvoices` | Factures section. Every invoice and credit note, same list, with the shipping line. Reads `invoices` directly |
 | `/quarterly` | `QuarterlyAverages` | YoY quarterly average deal size per rep |
 | `/taches` | `TasksDashboard` | Admin-only. CRM task completion per rep, by week |
 | `/settings` | `Settings` | Admin-only. Users and their sections, monthly objectives, fiscal quarters, syncs, webhook logs |

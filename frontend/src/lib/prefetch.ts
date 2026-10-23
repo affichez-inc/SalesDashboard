@@ -32,6 +32,8 @@ const ROUTE_CHUNKS: Record<string, () => Promise<unknown>> = {
     '/factures': () => import('../pages/FDashboard'),
     '/factures/weekly': () => import('../pages/FWeeklyDetail'),
     '/factures/quarterly': () => import('../pages/FQuarterlyAverages'),
+    '/factures/tous': () => import('../pages/AllInvoices'),
+    '/devis/tous': () => import('../pages/AllQuotes'),
     '/comptes': () => import('../pages/AccountsDashboard'),
     '/comptes/detail': () => import('../pages/AccountsDetail'),
     '/publicite': () => import('../pages/Advertising'),

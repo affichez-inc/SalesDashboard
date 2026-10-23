@@ -4,7 +4,7 @@ import {
     LayoutDashboard, CalendarDays, LineChart, Settings,
     Menu, LogOut, FileText, ClipboardList, Wallet,
     ChevronDown, Target, Eye, Building2, UserPlus, Percent,
-    CheckSquare, FileSignature, Receipt, BookUser, HandCoins, PenLine,
+    CheckSquare, FileSignature, Receipt, BookUser, HandCoins, PenLine, List,
 } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { useAuth } from '../contexts/AuthContext';
@@ -95,7 +95,8 @@ function getSectionKey(pathname: string): string {
  * rebuilt every render and depends on who is signed in.
  */
 function getGroupKey(pathname: string): string | null {
-    if (pathname === '/' || pathname.startsWith('/weekly') || pathname.startsWith('/quarterly')) return 'devis';
+    if (pathname === '/' || pathname.startsWith('/weekly') || pathname.startsWith('/quarterly')
+        || pathname.startsWith('/devis')) return 'devis';
     if (pathname.startsWith('/factures')) return 'factures';
     if (pathname.startsWith('/comptes') || pathname.startsWith('/leads')) return 'comptes';
     // Publicite, Taches, Commissions, Objectifs d'equipe and Documents crees are
@@ -336,6 +337,7 @@ export default function Layout() {
                         { name: 'Tableau de bord', href: '/',          icon: LayoutDashboard, end: true },
                         { name: 'Par semaine',     href: '/weekly',    icon: CalendarDays },
                         { name: 'Par trimestre',   href: '/quarterly', icon: LineChart },
+                        { name: 'Tous les devis',  href: '/devis/tous', icon: List },
                     ],
                 }] : []),
                 ...(sections.factures ? [{
@@ -344,6 +346,7 @@ export default function Layout() {
                         { name: 'Tableau de bord', href: '/factures',           icon: LayoutDashboard, end: true },
                         { name: 'Par semaine',     href: '/factures/weekly',    icon: CalendarDays },
                         { name: 'Par trimestre',   href: '/factures/quarterly', icon: LineChart },
+                        { name: 'Toutes les factures', href: '/factures/tous', icon: List },
                     ],
                 }] : []),
                 // Gated like the routes, and zoho_accounts is restricted the same

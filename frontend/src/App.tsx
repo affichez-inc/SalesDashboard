@@ -50,6 +50,8 @@ const Advertising = lazy(() => import('./pages/Advertising'));
 const Createurs = lazy(() => import('./pages/Createurs'));
 const PortailLeads = lazy(() => import('./pages/PortailLeads'));
 const TasksDashboard = lazy(() => import('./pages/TasksDashboard'));
+const AllQuotes = lazy(() => import('./pages/AllQuotes'));
+const AllInvoices = lazy(() => import('./pages/AllInvoices'));
 
 /**
  * Which routes exist depends on who is signed in.
@@ -92,6 +94,7 @@ function AppRoutes() {
                         <Route index element={<Dashboard />} />
                         <Route path="weekly" element={<WeeklyDetail />} />
                         <Route path="quarterly" element={<QuarterlyAverages />} />
+                        <Route path="devis/tous" element={<AllQuotes />} />
                     </>
                 ) : (
                     <Route index element={<Navigate to={home ?? '/settings'} replace />} />
@@ -103,6 +106,7 @@ function AppRoutes() {
                         <Route path="factures" element={<FDashboard />} />
                         <Route path="factures/weekly" element={<FWeeklyDetail />} />
                         <Route path="factures/quarterly" element={<FQuarterlyAverages />} />
+                        <Route path="factures/tous" element={<AllInvoices />} />
                     </>
                 )}
 

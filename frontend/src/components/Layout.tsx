@@ -338,6 +338,7 @@ export default function Layout() {
                         { name: 'Par semaine',     href: '/weekly',    icon: CalendarDays },
                         { name: 'Par trimestre',   href: '/quarterly', icon: LineChart },
                         { name: 'Tous les devis',  href: '/devis/liste', icon: List },
+                        { name: 'Tous les devis',  href: '/devis/tous', icon: List },
                     ],
                 }] : []),
                 ...(sections.factures ? [{
@@ -347,6 +348,7 @@ export default function Layout() {
                         { name: 'Par semaine',     href: '/factures/weekly',    icon: CalendarDays },
                         { name: 'Par trimestre',   href: '/factures/quarterly', icon: LineChart },
                         { name: 'Toutes les factures', href: '/factures/liste', icon: List },
+                        { name: 'Toutes les factures', href: '/factures/tous', icon: List },
                     ],
                 }] : []),
                 // Gated like the routes, and zoho_accounts is restricted the same

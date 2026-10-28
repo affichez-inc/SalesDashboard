@@ -51,6 +51,8 @@ const Createurs = lazy(() => import('./pages/Createurs'));
 const PortailLeads = lazy(() => import('./pages/PortailLeads'));
 const TasksDashboard = lazy(() => import('./pages/TasksDashboard'));
 const DocumentList = lazy(() => import('./pages/DocumentList'));
+const AllQuotes = lazy(() => import('./pages/AllQuotes'));
+const AllInvoices = lazy(() => import('./pages/AllInvoices'));
 
 /**
  * Which routes exist depends on who is signed in.
@@ -97,6 +99,7 @@ function AppRoutes() {
                             moving from one to the other would keep the first one's
                             search and rows. */}
                         <Route path="devis/liste" element={<DocumentList key="devis" kind="devis" />} />
+                        <Route path="devis/tous" element={<AllQuotes />} />
                     </>
                 ) : (
                     <Route index element={<Navigate to={home ?? '/settings'} replace />} />
@@ -109,6 +112,7 @@ function AppRoutes() {
                         <Route path="factures/weekly" element={<FWeeklyDetail />} />
                         <Route path="factures/quarterly" element={<FQuarterlyAverages />} />
                         <Route path="factures/liste" element={<DocumentList key="factures" kind="factures" />} />
+                        <Route path="factures/tous" element={<AllInvoices />} />
                     </>
                 )}
 

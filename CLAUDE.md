@@ -190,21 +190,25 @@ and the filter lives thousands of lines away from the SQL that aggregates it, so
 it is invisible from the query. The one that has already produced a wrong number
 on screen:
 
-> **`sales` holds every quote, of every status — not only sales.** With
-> `QUOTES_STORE_ALL_STATUSES` on, `zoho-sync` writes draft, sent, expired and
-> declined quotes beside the won ones (`accepted`, `invoiced`), and since the
-> 2026-10-27 back-fill it holds Zoho's whole history. Verified that day, before
+> **`sales` holds every quote, of every status — not only sales.** Since
+> 2026-09-18 (`20260918220000_quotes_foundation.sql`, `QUOTES_STORE_ALL_STATUSES`
+> in `zoho-sync`) it holds draft, sent, expired and declined quotes beside the
+> won ones (`accepted`, `invoiced`), and since the 2026-10-27 back-fill it holds
+> Zoho's whole history, every status, back to 2015. Verified that day, before
 > the back-fill: 5,680 of 16,953 rows were not won. **A revenue read that does
 > not filter `status IN ('accepted','invoiced')` counts quotes nobody bought.**
-> Mes Devis → Mensuel did exactly that until 2026-10-27: October 2026 showed
-> $2.97M against $0.90M won, and a commission on the difference.
+> Every revenue RPC names its statuses since `20260918180000`; Mes Devis →
+> Mensuel read the table directly and did not, until 2026-10-27: October 2026
+> showed $2.97M against $0.90M won, and a commission on the difference.
 >
 > `sale_date` is the acceptance date only on a won quote; on any other it falls
-> back to the issue date. A cohort of issued quotes is dated by `quote_date`.
+> back to the issue date. A cohort of issued quotes is dated by `quote_date`,
+> which the back-fill's walk set on every row (no NULL left on 2026-10-28).
 
-The table was won-only until 2026-09-18, which is why this section used to
-say a closing rate could not be computed. The losing quotes are there now: a
-closing rate is a cohort on `quote_date` (rule 3 below), as `get_creator_summary`
+The table was won-only until 2026-09-18, which is why the Créé par `Taux` once
+read 92% (the real figure for 2026 is 48%) and this section used to say a
+closing rate could not be computed. The losing quotes are there now: a closing
+rate is a cohort on `quote_date` (rule 3 below), as `get_creator_summary`
 computes it.
 
 Before adding or changing any statistic, the non-negotiables:
@@ -931,6 +935,8 @@ the table would just be overwritten by the next sync.
 | `/publicite` | `Advertising` | Publicité section. Google Ads + Meta spend against the revenue of the accounts tagged to each, invoiced or won in quotes (two tabs), in three views (payant, organique, Google inconnu). Channel-level and monthly, never per lead |
 | `/` | `Dashboard` | Devis section. YTD KPIs, rep leaderboard, top clients, monthly targets. Without the section, `/` redirects to the first section the user has |
 | `/weekly` | `WeeklyDetail` | Week-by-week sales breakdown (pivot + line items) |
+| `/devis/tous` | `AllQuotes` | Devis section. Every quote in `sales`, any status, searchable by client or number, paginated server-side. Reads the table directly (RLS gates it) |
+| `/factures/tous` | `AllInvoices` | Factures section. Every invoice and credit note, same list, with the shipping line. Reads `invoices` directly |
 | `/quarterly` | `QuarterlyAverages` | YoY quarterly average deal size per rep |
 | `/devis/liste` | `DocumentList` | Devis section. **Tous les devis**: every quote of every status, dated by issue. Search (client, number, rep), status, rep and year filters, sort, count, total and paging all in Postgres (`get_quote_list`) |
 | `/factures/liste` | `DocumentList` | Factures section. **Toutes les factures**: every invoice and credit note, same page (`get_invoice_list`). Neither list applies `excluded_clients`: they are directories, not statistics |

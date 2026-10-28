@@ -4,7 +4,8 @@
 #
 #   bash scripts/zoho-books-history-backfill.sh                   # both parts
 #   bash scripts/zoho-books-history-backfill.sh invoices          # invoices only
-#   bash scripts/zoho-books-history-backfill.sh invoices 2018     # invoices from 2018 only
+#   bash scripts/zoho-books-history-backfill.sh invoices 2018     # invoices from 2018 on
+#   bash scripts/zoho-books-history-backfill.sh invoices 2014 2014  # one year only
 #   bash scripts/zoho-books-history-backfill.sh quotes            # quotes only
 #
 # When to run it: once, after zoho-sync is deployed without the 2025 cutoff on
@@ -12,6 +13,7 @@
 # document nobody edits is never read again and the past never arrives by itself.
 #
 # Invoices: one calendar year per call, QC only (MTL has nothing before 2021).
+# QC's first invoice is dated 2014-04-04; Books holds nothing older.
 # Quotes: Books' estimates list has no date filter, so the walk covers the whole
 # history in slices of about two minutes and reports walk_complete when done.
 # Both are upserts on zoho_id: running the script twice changes nothing.
@@ -26,13 +28,14 @@ cd "$(dirname "$0")/.." || exit 1
 ANON="$(grep -E '^VITE_SUPABASE_ANON_KEY=' frontend/.env | cut -d= -f2- | tr -d '\r"')"
 [ -n "$ANON" ] || { echo "ERROR: VITE_SUPABASE_ANON_KEY not found in frontend/.env"; exit 1; }
 FN="https://auyfucbskylougsmmrks.supabase.co/functions/v1"
-FIRST_YEAR=2015
+FIRST_YEAR=2014
 LAST_YEAR=2020
 MAX_SLICES=40
 
 MODE="${1:-all}"
-case "$MODE" in all|invoices|quotes) ;; *) echo "usage: $0 [all|invoices [YEAR]|quotes]"; exit 1 ;; esac
+case "$MODE" in all|invoices|quotes) ;; *) echo "usage: $0 [all|invoices [FROM [TO]]|quotes]"; exit 1 ;; esac
 [ "$MODE" = "invoices" ] && [ -n "${2:-}" ] && FIRST_YEAR="$2"
+[ "$MODE" = "invoices" ] && [ -n "${3:-}" ] && LAST_YEAR="$3"
 
 stamp() { date -u +"%Y-%m-%d %H:%M:%SZ"; }
 

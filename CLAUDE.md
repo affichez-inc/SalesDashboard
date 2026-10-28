@@ -449,13 +449,15 @@ A full sync with `x-date-start: 2021-01-01` also pulled in ~4,000 invoices from
 department because Zoho has none on them.
 
 **The whole history, since 2026-10-27.** `scripts/zoho-books-history-backfill.sh`
-takes the QC invoices and credit notes back to the org's first, in February 2015
-(6,871 invoices dated 2015–2020 were counted in Books that day; MTL starts in
-2021), and walks every quote: `zoho-sync` no longer skips non-won quotes dated
-before 2025. Older invoices raise Comptes' lifetime figures (`revenue_lifetime`,
-first invoice) for accounts that bought before 2021; year-filtered screens do not
-move. Run once after the deploy; the incremental syncs keep everything current
-after that, whatever its date.
+takes the QC invoices and credit notes back to the org's first, dated 2014-04-04
+(6,871 invoices dated 2014–2020, voided ones included, were counted in Books;
+MTL starts in 2021), and walks every quote: `zoho-sync` no longer skips non-won
+quotes dated before 2025. Checked against Books on 2026-10-28, document by
+document: every non-void invoice and credit note of 2015–2020 present, with
+Books' date and total, and nothing extra. Older invoices raise Comptes' lifetime
+figures (`revenue_lifetime`, first invoice) for accounts that bought before 2021;
+year-filtered screens do not move. Run once after the deploy; the incremental
+syncs keep everything current after that, whatever its date.
 
 Four Zoho API quirks are worth knowing before touching `zoho-invoice-sync`:
 

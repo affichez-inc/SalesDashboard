@@ -53,26 +53,22 @@ export function viewHasSpend(view: AdView): boolean {
  * credit notes, or its won quotes (accepted or invoiced, dated by acceptance,
  * the rule of the Devis screens). Accounts, spend and the window are the same
  * on both; only the documents summed change (p_basis in get_ad_performance and
- * get_ad_monthly).
+ * get_ad_monthly). Each is a screen of its own in the nav: Factures at
+ * /publicite, the section's home, and Devis at /publicite/devis.
  */
 export type AdBasis = 'factures' | 'devis';
 
-export const DEFAULT_AD_BASIS: AdBasis = 'factures';
-
-export const AD_BASES: { value: AdBasis; label: string }[] = [
-    { value: 'factures', label: 'Factures' },
-    { value: 'devis',    label: 'Devis' },
-];
+/** The screen name of each basis, after "Publicité ·". */
+export const AD_BASIS_LABEL: Record<AdBasis, string> = {
+    factures: 'Factures',
+    devis: 'Devis',
+};
 
 /** The `p_basis` value of each basis. */
 export const AD_BASIS_PARAM: Record<AdBasis, 'invoices' | 'quotes'> = {
     factures: 'invoices',
     devis: 'quotes',
 };
-
-export function parseAdBasis(value: string): AdBasis {
-    return AD_BASES.some(b => b.value === value) ? (value as AdBasis) : DEFAULT_AD_BASIS;
-}
 
 /** The words that change with the basis. Everything else on the page reads the same. */
 export type BasisWords = {

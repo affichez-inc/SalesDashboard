@@ -21,8 +21,8 @@ import { SpendVsRevenueChart } from '../components/advertising/SpendVsRevenueCha
 import { CampaignTable } from '../components/advertising/CampaignTable';
 import {
     CHANNEL_LABEL, CHANNELS, AD_VIEWS, AD_VIEW_PARAM, DEFAULT_AD_VIEW,
-    AD_BASES, AD_BASIS_PARAM, DEFAULT_AD_BASIS, BASIS_WORDS,
-    channelLabel, isCohortOpen, parseAdView, parseAdBasis, viewHasSpend, formatAdDay,
+    AD_BASIS_LABEL, AD_BASIS_PARAM, BASIS_WORDS,
+    channelLabel, isCohortOpen, parseAdView, viewHasSpend, formatAdDay,
     adAccountLabel, inAdAccountSelection, narrowingAdAccounts,
 } from '../components/advertising/channel';
 import type { AdBasis, AdView } from '../components/advertising/channel';
@@ -42,10 +42,10 @@ import { AdvertisingIcon } from '../components/advertising/AdvertisingIcon';
  *               that source was reserved for organic arrivals. They mix paid
  *               and organic, so they are shown apart and counted in neither.
  *
- * Two tabs above the views choose what the accounts "bought": Factures (their
- * invoices, net of credit notes) or Devis (their won quotes, dated by
- * acceptance). The screen is the same on both; only the documents summed
- * change (p_basis).
+ * Two screens in the nav choose what the accounts "bought": Factures
+ * (/publicite, their invoices, net of credit notes) or Devis (/publicite/devis,
+ * their won quotes, dated by acceptance). The page is the same on both; only
+ * the documents summed change (p_basis).
  *
  * Attribution is by channel and by month of account creation. Revenue for a
  * period keeps accruing until its attribution window closes, so figures from an
@@ -107,14 +107,12 @@ const SUBTITLE: Record<AdBasis, Record<AdView, string>> = {
     },
 };
 
-export default function Advertising() {
+export default function Advertising({ basis }: { basis: AdBasis }) {
     const [viewParam, setViewParam] = useUrlState('vue', DEFAULT_AD_VIEW);
     const view = parseAdView(viewParam);
     const hasSpend = viewHasSpend(view);
     const viewArg = AD_VIEW_PARAM[view];
 
-    const [basisParam, setBasisParam] = useUrlState('donnees', DEFAULT_AD_BASIS);
-    const basis = parseAdBasis(basisParam);
     const basisArg = AD_BASIS_PARAM[basis];
 
     const [yearParam, setYearParam] = useUrlState('year', String(CURRENT_YEAR));
@@ -240,7 +238,7 @@ export default function Advertising() {
             // Sent only when set, so the page still reads a database that does
             // not have the parameter yet.
             ...(adAccountsParam ? { p_ad_accounts: adAccountsParam } : {}),
-            // Invoices are the default: only the Devis tab names its basis.
+            // Invoices are the default: only the Devis screen names its basis.
             ...(basisArg === 'quotes' ? { p_basis: basisArg } : {}),
         };
 
@@ -342,30 +340,13 @@ export default function Advertising() {
                     </span>
                     <div className="min-w-0">
                         <h1 className="text-xl md:text-2xl font-semibold text-ink tracking-tight">
-                            Publicité
+                            Publicité · {AD_BASIS_LABEL[basis]}
                         </h1>
                         <p className="text-xs md:text-sm text-ink-mute mt-0.5">{SUBTITLE[basis][view]}</p>
                     </div>
                 </div>
 
                 <div className="flex flex-wrap gap-2 self-start md:self-auto">
-                    <div className="flex gap-1 bg-stone p-0.5 rounded-md" role="tablist" aria-label="Données">
-                        {AD_BASES.map(b => (
-                            <button
-                                key={b.value}
-                                role="tab"
-                                aria-selected={basis === b.value}
-                                // Every filter applies to both: only the documents change.
-                                onClick={() => setBasisParam(b.value)}
-                                className={cn(
-                                    'px-4 py-1.5 rounded-md text-xs font-semibold whitespace-nowrap transition-all',
-                                    basis === b.value ? 'bg-white text-ink shadow-card' : 'text-ink-mute hover:text-ink-secondary',
-                                )}
-                            >
-                                {b.label}
-                            </button>
-                        ))}
-                    </div>
                     <div className="flex gap-1 bg-stone p-0.5 rounded-md" role="tablist" aria-label="Vue">
                         {AD_VIEWS.map(v => (
                             <button

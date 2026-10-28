@@ -138,11 +138,13 @@ function AppRoutes() {
                     </>
                 )}
 
-                {/* ─── Publicité - a screen of its own. ad_spend_daily is
-                    restricted by RLS to the same people. ─── */}
+                {/* ─── Publicité - one page, two screens: the accounts'
+                    invoices (the section's home) or their won quotes.
+                    ad_spend_daily is restricted by RLS to the same people. ─── */}
                 {sections.publicite && (
                     <>
-                        <Route path="publicite" element={<Advertising />} />
+                        <Route path="publicite" element={<Advertising basis="factures" />} />
+                        <Route path="publicite/devis" element={<Advertising basis="devis" />} />
                         {/* Its former address. Bookmarked and shared links carry
                             the filters in the query string, so keep them. */}
                         <Route path="comptes/publicite" element={<RedirectToPublicite />} />

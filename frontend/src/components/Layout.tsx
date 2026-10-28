@@ -30,6 +30,9 @@ interface NavLeaf {
     /** Match the path exactly. A module's own dashboard needs it: its path is a
      *  prefix of every other screen in the module. */
     end?: boolean;
+    /** Keep the query string when arriving from a path under this prefix:
+     *  screens that show one page over different data keep its filters. */
+    keepSearchUnder?: string;
 }
 
 /** A module - Devis, Factures, Comptes - holding the screens that belong to it. */
@@ -99,8 +102,9 @@ function getGroupKey(pathname: string): string | null {
         || pathname.startsWith('/devis')) return 'devis';
     if (pathname.startsWith('/factures')) return 'factures';
     if (pathname.startsWith('/comptes') || pathname.startsWith('/leads')) return 'comptes';
-    // Publicite, Taches, Commissions, Objectifs d'equipe and Documents crees are
-    // all single-screen leaves.
+    if (pathname.startsWith('/publicite')) return 'publicite';
+    // Taches, Commissions, Objectifs d'equipe and Documents crees are all
+    // single-screen leaves.
     return null;
 }
 
@@ -126,9 +130,13 @@ function Collapse({ open, children }: { open: boolean; children: React.ReactNode
 }
 
 function LeafLink({ item }: { item: NavLeaf }) {
+    const { pathname, search } = useLocation();
+    const to = item.keepSearchUnder && pathname.startsWith(item.keepSearchUnder)
+        ? { pathname: item.href, search }
+        : item.href;
     return (
         <NavLink
-            to={item.href}
+            to={to}
             end={item.end}
             // The screen's chunk and its first query start loading while the
             // pointer is still travelling.
@@ -362,12 +370,16 @@ export default function Layout() {
                 }] : []),
                 // Publicite sits beside the revenue it is measured against: it
                 // owns ad_spend_daily and its own syncs, and Comptes is a lens
-                // it looks through, not its parent. A leaf until a second
-                // screen exists - a module wrapping one screen is a collapse
-                // level that buys nothing.
-                ...(sections.publicite ? [
-                    { name: 'Publicité', href: '/publicite', icon: AdvertisingIcon, end: true },
-                ] : []),
+                // it looks through, not its parent. Its two screens are one page
+                // over the accounts' invoices or their won quotes, so moving
+                // between them keeps the filters.
+                ...(sections.publicite ? [{
+                    key: 'publicite', name: 'Publicité', icon: AdvertisingIcon,
+                    items: [
+                        { name: 'Factures', href: '/publicite',       icon: Receipt,       end: true, keepSearchUnder: '/publicite' },
+                        { name: 'Devis',    href: '/publicite/devis', icon: FileSignature, keepSearchUnder: '/publicite' },
+                    ],
+                }] : []),
                 // Leads - hidden while the Comptes module replaces it. Routes are
                 // commented out in App.tsx; leaving these visible would 404.
                 // {

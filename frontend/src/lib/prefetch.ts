@@ -41,6 +41,7 @@ const ROUTE_CHUNKS: Record<string, () => Promise<unknown>> = {
     '/comptes': () => import('../pages/AccountsDashboard'),
     '/comptes/detail': () => import('../pages/AccountsDetail'),
     '/publicite': () => import('../pages/Advertising'),
+    '/publicite/devis': () => import('../pages/Advertising'),
     '/portail': () => import('../pages/PortailObjectifs'),
     '/portail/devis': () => import('../pages/PortailDevis'),
     '/portail/factures': () => import('../pages/PortailFactures'),
@@ -75,12 +76,9 @@ const ROUTE_QUERIES: Record<string, () => void> = {
         p_year: null, p_exclude_ratings: null,
     }, { single: true }),
     '/taches': () => prefetchRpc('get_tasks_available_weeks', { p_year: CURRENT_YEAR }),
-    // The filter lists of the view the page opens on.
-    '/publicite': () => prefetchRpc('get_ad_filter_options', {
-        p_year: CURRENT_YEAR,
-        p_exclude_ratings: ['Compte interne : Ne pas reprendre', 'Fournisseur'],
-        p_view: AD_VIEW_PARAM[DEFAULT_AD_VIEW],
-    }, { single: true }),
+    // The filter lists of the view the page opens on, the same on both screens.
+    '/publicite': prefetchAdFilterOptions,
+    '/publicite/devis': prefetchAdFilterOptions,
     '/portail/leads': () => prefetchRpc('get_zoho_lead_filter_options', {
         p_year: CURRENT_YEAR, p_stage: 'lead',
     }, { single: true }),
@@ -89,6 +87,14 @@ const ROUTE_QUERIES: Record<string, () => void> = {
     '/factures/tous': () => prefetchDocumentList('factures'),
     '/devis/tous': () => prefetchDocumentList('devis'),
 };
+
+function prefetchAdFilterOptions(): void {
+    prefetchRpc('get_ad_filter_options', {
+        p_year: CURRENT_YEAR,
+        p_exclude_ratings: ['Compte interne : Ne pas reprendre', 'Fournisseur'],
+        p_view: AD_VIEW_PARAM[DEFAULT_AD_VIEW],
+    }, { single: true });
+}
 
 function prefetchDocumentList(kind: DocumentKind): void {
     prefetchRpc('get_document_list_options', { p_kind: DOCUMENT_OPTIONS_KIND[kind] });

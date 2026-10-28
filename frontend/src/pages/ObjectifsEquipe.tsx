@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useUrlStateNumber } from '../hooks/useUrlState';
 import { supabase } from '../lib/supabase';
 import { Save, RefreshCcw, Target } from 'lucide-react';
@@ -19,9 +19,7 @@ export default function ObjectifsEquipe() {
     const [saving, setSaving] = useState(false);
     const [saved, setSaved] = useState(false);
 
-    useEffect(() => { fetchObjectives(); }, [year]); // eslint-disable-line react-hooks/exhaustive-deps
-
-    const fetchObjectives = async () => {
+    const fetchObjectives = useCallback(async () => {
         setLoading(true);
         const { data, error } = await supabase
             .from('objectives_factures')
@@ -30,7 +28,10 @@ export default function ObjectifsEquipe() {
         if (error) console.error(error);
         else setObjectives(data || []);
         setLoading(false);
-    };
+    }, [year]);
+
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    useEffect(() => { fetchObjectives(); }, [fetchObjectives]);
 
     const handleUpdate = (month: number, dept: string, value: string) => {
         const amount = parseFloat(value) || 0;

@@ -199,7 +199,7 @@ export default function FDashboard() {
                     .lt('invoice_date', `${y + 1}-01-01`);
                 excludedClients.forEach((c: string) => { q = q.neq('client_name', c); });
                 if (officeParam) q = q.eq('office', officeParam);
-                if (statusesParam) q = q.in('status', statusesParam as any);
+                if (statusesParam) q = q.in('status', statusesParam);
                 if (deptsParam)    q = q.in('department', deptsParam);
                 if (monthParam) {
                     const nm = monthParam === 12 ? 1 : monthParam + 1;
@@ -217,10 +217,10 @@ export default function FDashboard() {
             ]);
 
             // Aggregate invoice rows into a month → {amount, count} map
-            const aggByMonth = (rows: any[]): Map<number, { amount: number; count: number }> => {
+            const aggByMonth = (rows: { invoice_date: string; amount: number; is_avoir: boolean }[]): Map<number, { amount: number; count: number }> => {
                 const map = new Map<number, { amount: number; count: number }>();
                 for (const r of (rows || [])) {
-                    const m = parseInt((r.invoice_date as string).split('-')[1], 10);
+                    const m = parseInt(r.invoice_date.split('-')[1], 10);
                     const cur = map.get(m) || { amount: 0, count: 0 };
                     cur.amount += Number(r.amount);
                     if (!r.is_avoir) cur.count++;
@@ -306,6 +306,7 @@ export default function FDashboard() {
 
     const fetchDataRef = useRef(fetchData);
     useEffect(() => { fetchDataRef.current = fetchData; }, [fetchData]);
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     useEffect(() => { fetchData(); }, [fetchData]);
     useEffect(() => {
         // Debounce realtime reloads: batch upserts fire many events in quick

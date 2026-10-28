@@ -95,13 +95,14 @@ export function MonthlyDetail({
     const [rows,  setRows]  = useState<Row[]>([]);
     const [loading, setLoading] = useState(true);
 
-    // Sync if parent changes initialYear / initialMonth (portail year filter)
-    useEffect(() => {
-        if (initialYear  !== undefined) setYear(initialYear);
-    }, [initialYear]);
-    useEffect(() => {
-        if (initialMonth !== undefined) setMonth(initialMonth);
-    }, [initialMonth]);
+    // The parent's year or month (the portail's filter) wins whenever it
+    // changes. Adjusted while rendering, so no frame shows the old period.
+    const [parentPeriod, setParentPeriod] = useState({ initialYear, initialMonth });
+    if (parentPeriod.initialYear !== initialYear || parentPeriod.initialMonth !== initialMonth) {
+        if (initialYear  !== undefined && initialYear  !== parentPeriod.initialYear)  setYear(initialYear);
+        if (initialMonth !== undefined && initialMonth !== parentPeriod.initialMonth) setMonth(initialMonth);
+        setParentPeriod({ initialYear, initialMonth });
+    }
 
     const fetchRows = useCallback(async () => {
         setLoading(true);
@@ -140,6 +141,7 @@ export function MonthlyDetail({
         setLoading(false);
     }, [module, repName, year, month]);
 
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     useEffect(() => { fetchRows(); }, [fetchRows]);
 
     // ─── Derived values ───────────────────────────────────────────────────────

@@ -1,4 +1,4 @@
-import { useEffect, useState, useMemo, useCallback } from 'react';
+import { useEffect, useState, useMemo, useCallback, useRef } from 'react';
 import { useUrlState } from '../hooks/useUrlState';
 import { supabase } from '../lib/supabase';
 import { cachedRpc, invalidateRpcCache } from '../lib/rpcCache';
@@ -56,7 +56,10 @@ export default function WeeklyDetail() {
     // same membership rule the server-side pages send as p_reps.
     const repFilter = useRepFilter(selectedReps, repList);
 
-    const clearData = () => { setSummaryData([]); setLineItems([]); };
+    // useUrlState's setter changes with every URL change; reading the latest
+    // one through a ref keeps the week list from reloading on each of them.
+    const setSelectedWeekRef = useRef(setSelectedWeek);
+    useEffect(() => { setSelectedWeekRef.current = setSelectedWeek; });
 
     const fetchAvailableWeeks = useCallback(async (showLoader = true) => {
         if (showLoader) setLoading(true);
@@ -65,11 +68,11 @@ export default function WeeklyDetail() {
         setAvailableWeeks(weeks);
         if (weeks.length > 0) {
             if (!weeks.find((w: AvailableWeek) => w.week_start === selectedWeek)) {
-                setSelectedWeek(weeks[0].week_start);
+                setSelectedWeekRef.current(weeks[0].week_start);
             }
-        } else { setSelectedWeek(''); clearData(); }
+        } else { setSelectedWeekRef.current(''); setSummaryData([]); setLineItems([]); }
         if (showLoader) setLoading(false);
-    }, [selectedWeek]); // eslint-disable-line react-hooks/exhaustive-deps
+    }, [selectedWeek]);
 
     const fetchWeekData = useCallback(async (weekStart: string, showLoader = true) => {
         if (showLoader) setLoading(true);
@@ -82,7 +85,9 @@ export default function WeeklyDetail() {
         if (showLoader) setLoading(false);
     }, []);
 
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     useEffect(() => { fetchAvailableWeeks(); }, [fetchAvailableWeeks]);
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     useEffect(() => { if (selectedWeek) fetchWeekData(selectedWeek); }, [selectedWeek, fetchWeekData]);
     useEffect(() => {
         const channel = supabase.channel('weekly-sales')

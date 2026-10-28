@@ -88,6 +88,7 @@ export default function QuarterlyAverages() {
     }, [teamTotals]);
 
     useEffect(() => {
+        // eslint-disable-next-line react-hooks/set-state-in-effect
         fetchAverages();
         const channel = supabase.channel('quarterly-sales')
             .on('postgres_changes', { event: '*', schema: 'public', table: 'sales' }, () => { invalidateRpcCache(); fetchAverages(); })

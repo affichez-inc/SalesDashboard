@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { useUrlState, useUrlStateNumber } from '../hooks/useUrlState';
 import { supabase } from '../lib/supabase';
 import { cachedRpc, invalidateRpcCache } from '../lib/rpcCache';
@@ -17,6 +17,7 @@ import { Select } from '../components/Select';
 import { useAuth } from '../contexts/AuthContext';
 import { SECTIONS, DEFAULT_FLAGS } from '../lib/sections';
 import type { SectionFlags } from '../lib/sections';
+import { useNow } from '../hooks/useNow';
 
 type Tab = 'objectives' | 'quarters' | 'sync' | 'logs' | 'users' | 'excluded';
 
@@ -100,15 +101,16 @@ function ObjectivesManager({ setMessage }: { setMessage: (m: { type: 'success' |
     const [loading, setLoading] = useState(true);
     const [saving, setSaving] = useState(false);
 
-    useEffect(() => { fetchObjectives(); }, [year]); // eslint-disable-line react-hooks/exhaustive-deps
-
-    const fetchObjectives = async () => {
+    const fetchObjectives = useCallback(async () => {
         setLoading(true);
         const { data, error } = await supabase.from('objectives_factures').select('*').eq('year', year);
         if (error) console.error(error);
         else setObjectives(data || []);
         setLoading(false);
-    };
+    }, [year]);
+
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    useEffect(() => { fetchObjectives(); }, [fetchObjectives]);
 
     const handleUpdate = (month: number, dept: string, value: string) => {
         const amount = parseFloat(value) || 0;
@@ -416,6 +418,7 @@ function SyncCard({ title, description, endpoint, actionLabel }: { title: string
     const [lastSync, setLastSync] = useState<WebhookLog | null>(null);
     const [recentLogs, setRecentLogs] = useState<WebhookLog[]>([]);
     const [logsLoading, setLogsLoading] = useState(true);
+    const now = useNow();
 
     const fetchSyncLogs = async () => {
         setLogsLoading(true);
@@ -428,6 +431,7 @@ function SyncCard({ title, description, endpoint, actionLabel }: { title: string
         setLogsLoading(false);
     };
 
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     useEffect(() => { fetchSyncLogs(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
     const runSync = async (fullSync: boolean) => {
@@ -453,7 +457,7 @@ function SyncCard({ title, description, endpoint, actionLabel }: { title: string
     const handleFullSync = () => runSync(true);
 
     const formatRelative = (iso: string) => {
-        const diffMin = Math.floor((Date.now() - new Date(iso).getTime()) / 60000);
+        const diffMin = Math.floor((now - new Date(iso).getTime()) / 60000);
         if (diffMin < 1) return 'il y a quelques secondes';
         if (diffMin < 60) return `il y a ${diffMin} min`;
         const diffH = Math.floor(diffMin / 60);
@@ -560,6 +564,7 @@ function WebhookLogs() {
         setLoading(false);
     };
 
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     useEffect(() => { fetchLogs(); }, []);
 
     return (
@@ -622,6 +627,7 @@ function UsersManager({ setMessage }: { setMessage: (m: { type: 'success' | 'err
         cachedRpc('get_distinct_rep_names').then(({ data }) => {
             if (data) setRepOptions((data as { rep_name: string }[]).map(r => r.rep_name));
         });
+        // eslint-disable-next-line react-hooks/set-state-in-effect
         setZohoUsersLoading(true);
         // The signed-in admin's own token: the function refuses anything else,
         // the anon key included.
@@ -646,6 +652,7 @@ function UsersManager({ setMessage }: { setMessage: (m: { type: 'success' | 'err
         setLoading(false);
     };
 
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     useEffect(() => { fetchUsers(); }, []);
 
     const handleSave = async () => {
@@ -960,6 +967,7 @@ function ExcludedClientsManager({ setMessage }: { setMessage: (m: { type: 'succe
         setLoading(false);
     };
 
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     useEffect(() => { fetchExcluded(); }, []);
     useEffect(() => () => { if (debounceRef.current) clearTimeout(debounceRef.current); }, []);
 

@@ -98,6 +98,7 @@ export default function FQuarterlyAverages() {
     }, [teamTotals]);
 
     useEffect(() => {
+        // eslint-disable-next-line react-hooks/set-state-in-effect
         fetchAverages();
         const channel = supabase.channel('inv-quarterly')
             .on('postgres_changes', { event: '*', schema: 'public', table: 'invoices' }, () => { invalidateRpcCache(); fetchAverages(); })

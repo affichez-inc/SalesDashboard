@@ -104,20 +104,10 @@ function TargetCell({
 
 // ─── Component ────────────────────────────────────────────────────────────────
 
+// The admin check comes first and alone: an early return placed among the
+// editor's hooks would change their number between renders.
 export default function PortailParametres({ propRepName }: Props) {
-    const { repName: authRepName, isAdmin } = useAuth();
-    const { viewAsRep } = useAdminView();
-    const repList = useRepList();
-    const [adminPickedRep, setAdminPickedRep] = useUrlState('rep', '');
-
-    // Admin accessing directly (no propRepName, not in view-as-rep): use their own picker
-    // Admin in view-as-rep mode or with propRepName: use that rep
-    // Member: not allowed
-    const repName = propRepName
-        ?? viewAsRep
-        ?? (isAdmin ? adminPickedRep : authRepName)
-        ?? '';
-
+    const { isAdmin } = useAuth();
     if (!isAdmin) {
         return (
             <div className="p-4 md:p-8 max-w-screen-xl mx-auto flex items-center justify-center min-h-[60vh]">
@@ -131,6 +121,22 @@ export default function PortailParametres({ propRepName }: Props) {
             </div>
         );
     }
+    return <RepObjectivesEditor propRepName={propRepName} />;
+}
+
+function RepObjectivesEditor({ propRepName }: Props) {
+    const { repName: authRepName, isAdmin } = useAuth();
+    const { viewAsRep } = useAdminView();
+    const repList = useRepList();
+    const [adminPickedRep, setAdminPickedRep] = useUrlState('rep', '');
+
+    // Admin accessing directly (no propRepName, not in view-as-rep): use their own picker
+    // Admin in view-as-rep mode or with propRepName: use that rep
+    // Member: not allowed
+    const repName = propRepName
+        ?? viewAsRep
+        ?? (isAdmin ? adminPickedRep : authRepName)
+        ?? '';
 
     const [year, setYear]           = useUrlStateNumber('year', new Date().getFullYear());
     const [deptModule, setDeptModule] = useUrlState('dept_module', 'devis');
@@ -182,6 +188,7 @@ export default function PortailParametres({ propRepName }: Props) {
         setLoading(false);
     }, [repName, module, year]);
 
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     useEffect(() => { fetchAll(); }, [fetchAll]);
 
     // ── Save dept cell ────────────────────────────────────────────────────────

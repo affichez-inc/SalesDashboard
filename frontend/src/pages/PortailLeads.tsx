@@ -74,6 +74,7 @@ export default function PortailLeads({ propRepName }: Props) {
 
     const fetchDataRef = useRef(fetchData);
     useEffect(() => { fetchDataRef.current = fetchData; }, [fetchData]);
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     useEffect(() => { fetchData(); }, [fetchData]);
     // Options load once per year change. The rule fires on any setState
     // reachable from an effect; the write happens in the awaited

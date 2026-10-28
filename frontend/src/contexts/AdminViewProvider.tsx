@@ -1,14 +1,5 @@
-import { createContext, useContext, useState } from 'react';
-
-interface AdminViewContextType {
-    viewAsRep: string | null;
-    setViewAsRep: (rep: string | null) => void;
-}
-
-const AdminViewContext = createContext<AdminViewContextType>({
-    viewAsRep: null,
-    setViewAsRep: () => {},
-});
+import { useState } from 'react';
+import { AdminViewContext } from './AdminViewContext';
 
 const STORAGE_KEY = 'adminViewAsRep';
 
@@ -29,5 +20,3 @@ export function AdminViewProvider({ children }: { children: React.ReactNode }) {
         </AdminViewContext.Provider>
     );
 }
-
-export const useAdminView = () => useContext(AdminViewContext);

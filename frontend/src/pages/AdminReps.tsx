@@ -114,6 +114,7 @@ export default function AdminReps() {
         setLoadingReps(false);
     }, [repTeam]);
 
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     useEffect(() => { loadReps(); }, [loadReps]);
 
     if (!isAdmin) {

@@ -245,7 +245,9 @@ export default function LeadsDetail({ propRepName }: { propRepName?: string }) {
 
     const fetchDataRef = useRef(fetchData);
     useEffect(() => { fetchDataRef.current = fetchData; }, [fetchData]);
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     useEffect(() => { fetchData(); }, [fetchData]);
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     useEffect(() => { fetchOptions(); }, [fetchOptions]);
 
     // Coalesced: a full sync upserts ~29k rows, and refetching once per change

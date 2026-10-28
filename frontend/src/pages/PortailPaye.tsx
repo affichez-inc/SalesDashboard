@@ -67,10 +67,10 @@ function isoToDDMMYYYY(iso: string): string {
 }
 
 function ddmmyyyyToISO(s: string): string | null {
-    const m = /^(\d{1,2})[\/\-\s.](\d{1,2})[\/\-\s.](\d{2,4})$/.exec(s.trim());
+    const m = /^(\d{1,2})[/\-\s.](\d{1,2})[/\-\s.](\d{2,4})$/.exec(s.trim());
     if (!m) return null;
-    let [, dd, mm, yy] = m;
-    if (yy.length === 2) yy = `20${yy}`;
+    const [, dd, mm, yyRaw] = m;
+    const yy = yyRaw.length === 2 ? `20${yyRaw}` : yyRaw;
     const day = parseInt(dd, 10), month = parseInt(mm, 10), year = parseInt(yy, 10);
     if (month < 1 || month > 12 || day < 1 || day > 31) return null;
     return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
@@ -429,9 +429,7 @@ export default function PortailPaye({ propRepName, embedded }: Props) {
                             {filteredEntries.length === 0 && (
                                 <tr>
                                     <td colSpan={canEdit ? 9 : 8} className="px-5 py-12 text-center text-sm text-ink-faint italic">
-                                        {false
-                                            ? `Aucune paie pour ce mois`
-                                            : `Aucune paie enregistrée pour ${year}`}
+                                        {`Aucune paie enregistrée pour ${year}`}
                                     </td>
                                 </tr>
                             )}
@@ -587,8 +585,6 @@ function DateDDMMInput({ isoValue, onChange }: { isoValue: string; onChange: (is
     const [focused, setFocused] = useState(false);
     const [draft, setDraft] = useState(isoToDDMMYYYY(isoValue));
 
-    useEffect(() => { if (!focused) setDraft(isoToDDMMYYYY(isoValue)); }, [isoValue, focused]);
-
     const handleBlur = () => {
         setFocused(false);
         const trimmed = draft.trim();
@@ -626,8 +622,6 @@ function DateDDMMInput({ isoValue, onChange }: { isoValue: string; onChange: (is
 function NumInput({ value, onChange, color }: { value: string; onChange: (v: string) => void; color: string }) {
     const [focused, setFocused] = useState(false);
     const [draft, setDraft] = useState(value);
-
-    useEffect(() => { if (!focused) setDraft(value); }, [value, focused]);
 
     const handleBlur = () => {
         setFocused(false);
@@ -682,8 +676,6 @@ function MetaCard({ label, value, onChange, bg, text, readOnly }: {
 }) {
     const [editing, setEditing] = useState(false);
     const [draft, setDraft] = useState(value === 0 ? '' : String(value));
-
-    useEffect(() => { if (!editing) setDraft(value === 0 ? '' : String(value)); }, [value, editing]);
 
     return (
         <div className={cn("p-3 md:p-4 rounded-xl border", bg)}>

@@ -1,45 +1,9 @@
-import { createContext, useContext, useEffect, useState, useCallback, useRef } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import type { User } from '@supabase/supabase-js';
 import { supabase } from '../lib/supabase';
 import { invalidateRpcCache } from '../lib/rpcCache';
-import { NO_ACCESS, sectionAccessFromRow } from '../lib/sections';
-import type { SectionAccess } from '../lib/sections';
-
-/**
- * Whether the signed-in address is in allowed_users.
- *
- *   granted   it has a row;
- *   denied    it has none - the person can sign in to Zoho but was never added
- *             here, or was removed. The database returns them no rows either;
- *   error     the lookup itself failed, which says nothing about the person.
- */
-export type AccessState = 'granted' | 'denied' | 'error';
-
-interface Permissions {
-    access: AccessState;
-    isAdmin: boolean;
-    /** The sections this user can open. All true for an admin. */
-    sections: SectionAccess;
-    repName: string | null;
-}
-
-interface AuthContextType extends Permissions {
-    user: User | null;
-    loading: boolean;
-    signOut: () => Promise<void>;
-    /** Read allowed_users again, e.g. after a failed lookup. */
-    refreshAccess: () => Promise<void>;
-}
-
-const NO_PERMS: Permissions = { access: 'denied', isAdmin: false, sections: NO_ACCESS, repName: null };
-
-const AuthContext = createContext<AuthContextType>({
-    user: null,
-    loading: true,
-    signOut: async () => {},
-    refreshAccess: async () => {},
-    ...NO_PERMS,
-});
+import { sectionAccessFromRow } from '../lib/sections';
+import { AuthContext, NO_PERMS, type Permissions } from './AuthContext';
 
 /** How often a returning tab re-reads its own row, at most. */
 const RECHECK_AFTER_MS = 60_000;
@@ -153,5 +117,3 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         </AuthContext.Provider>
     );
 }
-
-export const useAuth = () => useContext(AuthContext);

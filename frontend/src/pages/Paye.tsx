@@ -221,6 +221,7 @@ export default function Paye() {
         setLoading(false);
     }, [year, officeParam, monthParam]);
 
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     useEffect(() => { fetchData(); }, [fetchData]);
 
     // Helpers to update paye records

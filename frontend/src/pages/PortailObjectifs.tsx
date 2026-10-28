@@ -160,6 +160,7 @@ export default function PortailObjectifs({ propRepName }: Props) {
         setLoading(false);
     }, [repName, year, prevYear]);
 
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     useEffect(() => { fetchAll(); }, [fetchAll]);
 
     // ─── Derived ──────────────────────────────────────────────────────────────

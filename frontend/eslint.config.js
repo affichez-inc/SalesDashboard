@@ -6,7 +6,9 @@ import tseslint from 'typescript-eslint'
 import { defineConfig, globalIgnores } from 'eslint/config'
 
 export default defineConfig([
-  globalIgnores(['dist']),
+  // branding/reference is the brand kit's own code, kept verbatim to copy from;
+  // the app compiles src only.
+  globalIgnores(['dist', 'branding/reference']),
   {
     files: ['**/*.{ts,tsx}'],
     extends: [

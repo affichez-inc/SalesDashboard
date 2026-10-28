@@ -1,8 +1,9 @@
 import { lazy, Suspense } from 'react';
 import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import { Loader2 } from 'lucide-react';
-import { AuthProvider, useAuth } from './contexts/AuthContext';
-import { AdminViewProvider } from './contexts/AdminViewContext';
+import { useAuth } from './contexts/AuthContext';
+import { AuthProvider } from './contexts/AuthProvider';
+import { AdminViewProvider } from './contexts/AdminViewProvider';
 import Layout from './components/Layout';
 
 import Login from './pages/Login';

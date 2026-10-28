@@ -76,6 +76,7 @@ export default function PortailFactures({ propRepName }: Props) {
 
     const fetchDataRef = useRef(fetchData);
     useEffect(() => { fetchDataRef.current = fetchData; }, [fetchData]);
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     useEffect(() => { fetchData(); }, [fetchData]);
     useEffect(() => {
         let timer: ReturnType<typeof setTimeout>;

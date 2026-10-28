@@ -222,6 +222,7 @@ export default function RepDashboard() {
         }
     }, [selectedRep, repTeam]);
 
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     useEffect(() => { loadReps(); }, [loadReps]);
 
     // Fetch devis data for rep
@@ -265,7 +266,9 @@ export default function RepDashboard() {
         setInvLoading(false);
     }, [year, repParam, monthParam]);
 
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     useEffect(() => { fetchDevis(); }, [fetchDevis]);
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     useEffect(() => { fetchInvoices(); }, [fetchInvoices]);
 
     const yearOptions = [2025, 2026, 2027].map(y => ({ value: String(y), label: String(y) }));

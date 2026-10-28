@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Loader2, RefreshCcw } from 'lucide-react';
 import { supabase } from '../lib/supabase';
+import { useNow } from '../hooks/useNow';
 
 interface SyncButtonProps {
     functionName?: string;
@@ -16,6 +17,7 @@ export function SyncButton({
     const [syncing, setSyncing] = useState(false);
     const [lastSyncTime, setLastSyncTime] = useState<string | null>(null);
     const [badge, setBadge] = useState<{ upserted: number; deleted: number } | null>(null);
+    const now = useNow();
 
     const fetchLastSync = useCallback(async () => {
         const { data } = await supabase
@@ -29,6 +31,7 @@ export function SyncButton({
     }, [logPattern]);
 
     // Load last sync timestamp on mount
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     useEffect(() => { fetchLastSync(); }, [fetchLastSync]);
 
     const handleSync = useCallback(async () => {
@@ -56,7 +59,7 @@ export function SyncButton({
     }, [functionName, onSyncComplete, fetchLastSync]);
 
     const formatRelative = (iso: string) => {
-        const diffMs = Date.now() - new Date(iso).getTime();
+        const diffMs = now - new Date(iso).getTime();
         const diffMin = Math.floor(diffMs / 60000);
         if (diffMin < 1) return 'à l\'instant';
         if (diffMin < 60) return `il y a ${diffMin} min`;

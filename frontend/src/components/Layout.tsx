@@ -311,16 +311,18 @@ export default function Layout() {
     const [openGroups, setOpenGroups] = useState<Set<string>>(
         () => new Set([getGroupKey(location.pathname) ?? DEFAULT_GROUP])
     );
-    // Auto-open the section and the module a navigation lands in
-    useEffect(() => {
+    // A navigation opens the section and the module it lands in, and closes the
+    // mobile menu. Adjusted while rendering rather than in an effect, so the new
+    // page never paints once with the previous menu state.
+    const [navPath, setNavPath] = useState(location.pathname);
+    if (navPath !== location.pathname) {
+        setNavPath(location.pathname);
         const key = getSectionKey(location.pathname);
         setOpenSections(prev => prev.has(key) ? prev : new Set([...prev, key]));
         const group = getGroupKey(location.pathname);
         if (group) setOpenGroups(prev => prev.has(group) ? prev : new Set([...prev, group]));
-    }, [location.pathname]);
-
-    // Close mobile menu on route change
-    useEffect(() => { setIsMobileMenuOpen(false); }, [location.pathname]);
+        setIsMobileMenuOpen(false);
+    }
 
     const displayName = user?.email
         ? user.email.split('@')[0].charAt(0).toUpperCase() + user.email.split('@')[0].slice(1)

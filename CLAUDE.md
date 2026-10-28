@@ -149,7 +149,8 @@ deliberate and easy to "tidy" into a bug:
 `reps` and `leads` have one write policy (`<table>_admin_all`) and the restrictive
 `admin_*_only` policies on top.
 
-`AuthContext` reads the user's own row with `select('*')` and exposes `access`
+`AuthProvider` (`contexts/AuthProvider.tsx`; the context and `useAuth` live in
+`contexts/AuthContext.ts`) reads the user's own row with `select('*')` and exposes `access`
 (`granted` / `denied` / `error`), `isAdmin` and `sections`. `App.tsx` builds the
 routes from `sections`; a URL outside them falls to the catch-all and lands on
 `homePathFor(sections)`, the first section the person can open. When you add a
@@ -1152,6 +1153,21 @@ reported, the merge applies.
 Pages are self-contained — state, data fetching, filters, and rendering are colocated. Feature-specific sub-components live in `src/components/{feature}/` (e.g., `weekly/ZoneAPivotTable`, `dashboard/SommaireTable`).
 
 The `Settings` page uses an internal tab system (`reps | objectives | quarters | logs`) with each section as a separate function component defined in the same file.
+
+**Lint is at zero; keep it there** (`npm run lint`, React compiler rules from
+`eslint-plugin-react-hooks` 7). Three rules the code follows:
+
+- **A data load in an effect carries `// eslint-disable-next-line
+  react-hooks/set-state-in-effect`.** `useEffect(() => { fetchData(); }, [fetchData])`
+  flips `loading` before the request and writes the rows after it; that is the
+  shape of every screen here, not a cascade. Any other effect that only copies a
+  prop or the route into state is written as an adjustment during render
+  instead (`Layout`'s open sections, `MonthlyDetail`'s period).
+- **No `Date.now()` during render**: `useNow()` (`hooks/useNow.ts`) gives a time
+  that refreshes, for "il y a 3 min" labels.
+- **A file exporting a component exports only components** (Fast Refresh): a
+  context lives in `XContext.ts` with its hook, its provider in `XProvider.tsx`.
+  `branding/reference` is the brand kit's own code and is not linted.
 
 ### No `any` Types
 TypeScript's `no-any` rule is enforced. All Supabase RPC results must be typed against `src/types/database.ts`. Extend the types file when new RPC functions or views are added.

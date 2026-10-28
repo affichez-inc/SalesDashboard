@@ -101,15 +101,20 @@ export default function TasksDashboard() {
 
     const repList = useRepList();
 
+    // useUrlState's setter changes with every URL change; reading the latest
+    // one through a ref keeps the week list from reloading on each of them.
+    const setSelectedWeekRef = useRef(setSelectedWeek);
+    useEffect(() => { setSelectedWeekRef.current = setSelectedWeek; });
+
     // Available weeks for the week switcher (newest-first)
     const fetchWeeks = useCallback(async () => {
         const { data } = await cachedRpc('get_tasks_available_weeks', { p_year: new Date().getFullYear() });
         const weeks: TasksAvailableWeek[] = data || [];
         setAvailableWeeks(weeks);
         if (weeks.length > 0 && !weeks.find(w => w.week_start === selectedWeek)) {
-            setSelectedWeek(weeks[0].week_start);
+            setSelectedWeekRef.current(weeks[0].week_start);
         }
-    }, [selectedWeek]); // eslint-disable-line react-hooks/exhaustive-deps
+    }, [selectedWeek]);
 
     const fetchData = useCallback(async () => {
         // In weekly mode wait until a week is chosen (avoids a flash of yearly data)
@@ -144,7 +149,9 @@ export default function TasksDashboard() {
     const fetchDataRef = useRef(fetchData);
     const fetchWeeksRef = useRef(fetchWeeks);
     useEffect(() => { fetchDataRef.current = fetchData; fetchWeeksRef.current = fetchWeeks; }, [fetchData, fetchWeeks]);
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     useEffect(() => { fetchWeeks(); }, [fetchWeeks]);
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     useEffect(() => { fetchData(); }, [fetchData]);
 
     useEffect(() => {

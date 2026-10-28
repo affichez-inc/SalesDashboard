@@ -3,6 +3,7 @@ import { useUrlState, useUrlStateNumber, useUrlList } from '../hooks/useUrlState
 import { supabase } from '../lib/supabase';
 import { cachedRpc, invalidateRpcCache } from '../lib/rpcCache';
 import { Loader2, TrendingUp, Users, Target, Briefcase, Trophy, User, FileText, X, ChevronRight } from 'lucide-react';
+import type { LucideIcon } from 'lucide-react';
 import type { SommaireRow } from '../types/database';
 import { SommaireTable } from '../components/dashboard/SommaireTable';
 import { DEPARTMENTS, MONTHS, OFFICES, SALE_STATUSES } from '../lib/constants';
@@ -194,6 +195,7 @@ export default function Dashboard() {
     useEffect(() => { fetchDataRef.current = fetchData; }, [fetchData]);
 
     // Re-fetch whenever filters change
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     useEffect(() => { fetchData(); }, [fetchData]);
 
     // Realtime subscription - set up once, always calls the latest fetchData via ref
@@ -272,7 +274,6 @@ export default function Dashboard() {
                             subText="Revenus cumulés"
                             icon={TrendingUp}
                             trend={hasTarget ? kpis?.pct_of_target : undefined}
-                            trendLabel="de l'objectif"
                         />
                         <KPICard
                             title="Total Devis"
@@ -482,7 +483,19 @@ function Modal({ title, onClose, children }: { title: string; onClose: () => voi
     );
 }
 
-function KPICard({ title, value, subValue, subText, icon: Icon, trend, dual }: any) {
+interface KPICardProps {
+    title: string;
+    value: string;
+    /** The second figure of a `dual` card. */
+    subValue?: string;
+    subText: string;
+    icon: LucideIcon;
+    /** Percent of target, shown as a badge. */
+    trend?: number;
+    dual?: boolean;
+}
+
+function KPICard({ title, value, subValue, subText, icon: Icon, trend, dual }: KPICardProps) {
     return (
         <div className="bg-white p-3 md:p-5 rounded-xl shadow-card flex flex-col justify-between hover:shadow-elevated transition-all group">
             <div className="flex items-start justify-between mb-2 md:mb-4">

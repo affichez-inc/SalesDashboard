@@ -190,18 +190,22 @@ and the filter lives thousands of lines away from the SQL that aggregates it, so
 it is invisible from the query. The one that has already produced a wrong number
 on screen:
 
-> **`sales` holds only quotes that were WON.** `accepted` and `invoiced`, plus
-> `declined` *only when the quote was accepted first*. Quotes that were sent,
-> drafted or expired are **never written at all** — the sync inserts only on
-> `accepted`/`invoiced`/`paid` (`zoho-sync/index.ts:316`) and merely PATCHes
-> existing rows on decline (`:343`). Verified: 8,085 rows, 0 of them `sent`,
-> `draft` or `expired`; Zoho's QC org alone holds 3,000+ expired and 1,500+
-> declined that the database has never seen.
+> **`sales` holds every quote, of every status — not only sales.** With
+> `QUOTES_STORE_ALL_STATUSES` on, `zoho-sync` writes draft, sent, expired and
+> declined quotes beside the won ones (`accepted`, `invoiced`), and since the
+> 2026-10-27 back-fill it holds Zoho's whole history. Verified that day, before
+> the back-fill: 5,680 of 16,953 rows were not won. **A revenue read that does
+> not filter `status IN ('accepted','invoiced')` counts quotes nobody bought.**
+> Mes Devis → Mensuel did exactly that until 2026-10-27: October 2026 showed
+> $2.97M against $0.90M won, and a commission on the difference.
+>
+> `sale_date` is the acceptance date only on a won quote; on any other it falls
+> back to the issue date. A cohort of issued quotes is dated by `quote_date`.
 
-So **you cannot compute a closing rate, win rate or conversion rate from
-`sales`** — the losing quotes are not in there. The Créé par page's `Taux` shows
-92% for this reason; the real figure is at most ~58%. Fixing it means changing
-the sync, not the SQL.
+The table was won-only until 2026-09-18, which is why this section used to
+say a closing rate could not be computed. The losing quotes are there now: a
+closing rate is a cohort on `quote_date` (rule 3 below), as `get_creator_summary`
+computes it.
 
 Before adding or changing any statistic, the non-negotiables:
 
@@ -407,6 +411,18 @@ RPC filters on status.
 Statuses were audited at the same time and were right: all 4,412 documents of
 2026 matched Zoho. A payment does reach the 5-minute incremental sync.
 
+**Quotes have the same blind spot, on the open ones.** A draft or sent quote
+deleted in Books, or one passing its expiry date (which, like an invoice turning
+overdue, does not move `last_modified_time`), stayed draft or sent here. So
+`zoho-sync`'s incremental run, at most once an hour (pointer
+`sync_state.devis_open`; `x-open-check: true` forces it), reads Books' Draft and
+Sent lists, writes the quotes whose status differs, and reads back one by one
+(25 per org per pass) every row held as draft or sent that neither list carries:
+a 404 removes it, anything else rewrites it from the detail payload. The detail
+payload carries the custom fields only in `custom_field_hash`; `estimateRow()`
+reads both shapes, checked to give identical rows. Won, declined and expired
+quotes deleted in Books are still only caught by the manual orphan sweep.
+
 ### The syncs no longer discard records silently
 
 `zoho-invoice-sync` and `zoho-sync` used to `continue` past any record whose
@@ -427,6 +443,15 @@ It found sixteen months of missing money on the first run:
 A full sync with `x-date-start: 2021-01-01` also pulled in ~4,000 invoices from
 2021-22 that the old window had never covered. They are kept; they carry no
 department because Zoho has none on them.
+
+**The whole history, since 2026-10-27.** `scripts/zoho-books-history-backfill.sh`
+takes the QC invoices and credit notes back to the org's first, in February 2015
+(6,871 invoices dated 2015–2020 were counted in Books that day; MTL starts in
+2021), and walks every quote: `zoho-sync` no longer skips non-won quotes dated
+before 2025. Older invoices raise Comptes' lifetime figures (`revenue_lifetime`,
+first invoice) for accounts that bought before 2021; year-filtered screens do not
+move. Run once after the deploy; the incremental syncs keep everything current
+after that, whatever its date.
 
 Four Zoho API quirks are worth knowing before touching `zoho-invoice-sync`:
 
@@ -476,6 +501,14 @@ slice at a time under Zoho's 100-calls/minute/org limit by the
 know about the other. `get_lead_invoice_totals` / `get_lead_invoices` back the
 Factures column and modal on the Leads page; `get_invoice_linkage_status` reports
 back-fill coverage in Settings.
+
+**Quotes use the same bridge** (`20261027120000_ad_quotes_basis.sql`). `zoho-sync` writes
+`sales.books_customer_id` from the estimates list (`customer_id` is on it); a trigger fills
+`sales.crm_account_id` from `zoho_books_customers`, `zoho_books_customers_propagate` updates
+quotes as well as invoices, and `enqueue_books_customers` also queues customers named only on a
+quote. Rows stored before the column existed get it from one full walk
+(`x-full-sync: true`, re-run until the cursor clears). The resolver never re-asks a customer
+it has answered: one resolved `unlinked` stays unlinked even if Books links it later.
 
 ### Comptes: the account is the record
 
@@ -710,6 +743,17 @@ those two channels. Setup and credentials: **`docs/ADVERTISING.md`**.
   build shows what it always showed; `p_view` wins. Drop the parameter in a later migration.
 - **Attribution is by channel and month of account creation, never per lead or per campaign** —
   the CRM stores no click identifiers. The campaign table therefore has no revenue column.
+- **Two tabs, Factures and Devis (`?donnees=`), one screen.** `p_basis => 'quotes'` on
+  `get_ad_performance` and `get_ad_monthly` (`20261027120000_ad_quotes_basis.sql`) sums the
+  accounts' **won** quotes (`status` accepted or invoiced, dated by `sale_date`, the Devis rule)
+  instead of their invoices; accounts, spend, the window and every ratio are unchanged. Anything
+  else, NULL included, reads invoices, and the page sends `p_basis` on the Devis tab only. The
+  quote figure is gross: credit notes exist only on the invoice side, so a credited sale stays
+  in Devis (August 2026 Meta: 9 180 $ invoiced against 43 135 $ won, Rieker's credit note). Quotes
+  reach their account through `sales.crm_account_id`, the same Books-customer bridge invoices use
+  (see **Invoices on a lead or contact**). The read is a `LATERAL` union whose branches each match
+  the account: a plain `UNION ALL` joined on the account hash-joins every invoice, and two
+  `ON`-gated joins probe both tables.
 - **Origins only exist from a date** (`Google Ads` from its first tagged account, created after
   2026-09-29; `Meta Ads` regularly from 2024-08-21). Google months before that show no accounts and
   no return, by design. `ad_source_first_used()` exposes it; `roas`/`net` are NULL when a
@@ -884,10 +928,12 @@ the table would just be overwritten by the next sync.
 | `/comptes` | `AccountsDashboard` | Comptes section. Account cohorts by source/rep/service/domaine, monthly evolution vs last year, revenue attribution window |
 | `/createurs` | `Createurs` | **Documents créés** in the nav. Admin-only. Who *created* each quote/invoice, vs who sold it — a rep who builds a quote and hands it to another still gets the credit here. Never reconciles with rep figures, by design |
 | `/comptes/detail` | `AccountsDetail` | Comptes section. Searchable client directory; a row opens its billing history by department and year |
-| `/publicite` | `Advertising` | Publicité section. Google Ads + Meta spend against the revenue of the accounts tagged to each, in three views (payant, organique, Google inconnu). Channel-level and monthly, never per lead |
+| `/publicite` | `Advertising` | Publicité section. Google Ads + Meta spend against the revenue of the accounts tagged to each, invoiced or won in quotes (two tabs), in three views (payant, organique, Google inconnu). Channel-level and monthly, never per lead |
 | `/` | `Dashboard` | Devis section. YTD KPIs, rep leaderboard, top clients, monthly targets. Without the section, `/` redirects to the first section the user has |
 | `/weekly` | `WeeklyDetail` | Week-by-week sales breakdown (pivot + line items) |
 | `/quarterly` | `QuarterlyAverages` | YoY quarterly average deal size per rep |
+| `/devis/liste` | `DocumentList` | Devis section. **Tous les devis**: every quote of every status, dated by issue. Search (client, number, rep), status, rep and year filters, sort, count, total and paging all in Postgres (`get_quote_list`) |
+| `/factures/liste` | `DocumentList` | Factures section. **Toutes les factures**: every invoice and credit note, same page (`get_invoice_list`). Neither list applies `excluded_clients`: they are directories, not statistics |
 | `/taches` | `TasksDashboard` | Admin-only. CRM task completion per rep, by week |
 | `/settings` | `Settings` | Admin-only. Users and their sections, monthly objectives, fiscal quarters, syncs, webhook logs |
 

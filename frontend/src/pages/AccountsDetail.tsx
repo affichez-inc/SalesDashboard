@@ -4,8 +4,7 @@ import { useUrlState, useUrlStateNumber } from '../hooks/useUrlState';
 import { supabase } from '../lib/supabase';
 import { cachedRpc, invalidateRpcCache } from '../lib/rpcCache';
 import {
-    Loader2, ExternalLink, Search, RefreshCw, ChevronLeft, ChevronRight,
-    ChevronsLeft, ChevronsRight, X,
+    Loader2, ExternalLink, Search, RefreshCw, X,
 } from 'lucide-react';
 import type {
     ZohoAccountRow, ZohoAccountFilterOptions, LeadInvoiceRow, LeadInvoiceTotals,
@@ -16,6 +15,7 @@ import { FilterBar, FilterGroup } from '../components/FilterBar';
 import { Select } from '../components/Select';
 import { ExportButton } from '../components/ExportButton';
 import { ExportMenu } from '../components/ExportMenu';
+import { Pager } from '../components/Pager';
 import { ClearFiltersButton } from '../components/ClearFiltersButton';
 import { TagCell } from '../components/TagCell';
 import { useRepFilter, REP_ALL_LABEL } from '../hooks/useRepFilter';
@@ -638,6 +638,7 @@ export default function AccountsDetail() {
                     page={page} totalPages={totalPages} total={total}
                     rangeStart={rangeStart} rangeEnd={rangeEnd}
                     onChange={setPage} position="top"
+                    noun="comptes" emptyLabel="Aucun compte"
                     note={amountActive ? 'triés par montant facturé' : undefined}
                 />
 
@@ -814,6 +815,7 @@ export default function AccountsDetail() {
                         page={page} totalPages={totalPages} total={total}
                         rangeStart={rangeStart} rangeEnd={rangeEnd}
                         onChange={setPage} position="bottom"
+                        noun="comptes" emptyLabel="Aucun compte"
                     />
                 )}
             </div>
@@ -830,58 +832,6 @@ export default function AccountsDetail() {
                     onClose={() => setAudienceOpen(false)}
                 />
             )}
-        </div>
-    );
-}
-
-/**
- * The pager, rendered above and below the table.
- *
- * First and last buttons matter here in a way they do not on a short list: 20,645
- * accounts is 188 pages, and stepping to the end one arrow at a time is not a
- * navigation option.
- */
-function Pager({ page, totalPages, total, rangeStart, rangeEnd, onChange, position, note }: {
-    page: number;
-    totalPages: number;
-    total: number;
-    rangeStart: number;
-    rangeEnd: number;
-    onChange: (p: number) => void;
-    position: 'top' | 'bottom';
-    /** Said after the count, e.g. how the rows are ordered when it is not the default. */
-    note?: string;
-}) {
-    const go = (p: number) => onChange(Math.min(totalPages, Math.max(1, p)));
-    const btn = 'p-1.5 rounded-md text-ink-mute hover:bg-stone disabled:opacity-30 disabled:hover:bg-transparent';
-    return (
-        <div className={cn(
-            'flex flex-wrap items-center justify-between gap-3 px-5 py-3',
-            position === 'top' ? 'border-b border-hairline' : 'border-t border-hairline bg-sand/40',
-        )}>
-            <p className="text-xs font-medium text-ink-mute" translate="no">
-                {total === 0
-                    ? 'Aucun compte'
-                    : rangeStart + '–' + rangeEnd + ' sur ' + total.toLocaleString('fr-CA') + ' comptes'}
-                {note && total > 0 && <span className="text-ink-faint">{' · ' + note}</span>}
-            </p>
-            <div className="flex items-center gap-1">
-                <button onClick={() => go(1)} disabled={page <= 1} aria-label="Première page" className={btn}>
-                    <ChevronsLeft className="w-4 h-4" />
-                </button>
-                <button onClick={() => go(page - 1)} disabled={page <= 1} aria-label="Page précédente" className={btn}>
-                    <ChevronLeft className="w-4 h-4" />
-                </button>
-                <span className="text-xs font-semibold text-ink-mute px-2 tabular-nums" translate="no">
-                    {page} / {totalPages}
-                </span>
-                <button onClick={() => go(page + 1)} disabled={page >= totalPages} aria-label="Page suivante" className={btn}>
-                    <ChevronRight className="w-4 h-4" />
-                </button>
-                <button onClick={() => go(totalPages)} disabled={page >= totalPages} aria-label="Dernière page" className={btn}>
-                    <ChevronsRight className="w-4 h-4" />
-                </button>
-            </div>
         </div>
     );
 }

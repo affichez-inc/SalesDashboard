@@ -128,6 +128,8 @@ export function MonthlyDetail({
             let q = supabase
                 .from('sales')
                 .select('zoho_id,quote_number,sale_date,client_name,amount,department,rep_name,status')
+                // `sales` holds every quote; a sale is a won one, dated by acceptance.
+                .in('status', ['accepted', 'invoiced'])
                 .gte('sale_date', dateStart)
                 .lt('sale_date', dateEnd)
                 .order('sale_date', { ascending: true });

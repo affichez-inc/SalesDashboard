@@ -59,6 +59,7 @@ const TTL_BY_FN: Record<string, number> = {
     get_available_weeks: LONG_TTL,
     get_inv_available_weeks: LONG_TTL,
     get_zoho_accounts_filter_regions: LONG_TTL,
+    get_document_list_options: LONG_TTL,
     // The top of the amount slider: a scale, not a figure anyone reads.
     get_account_spend_max: LONG_TTL,
 };

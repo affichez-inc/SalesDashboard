@@ -50,6 +50,7 @@ const Advertising = lazy(() => import('./pages/Advertising'));
 const Createurs = lazy(() => import('./pages/Createurs'));
 const PortailLeads = lazy(() => import('./pages/PortailLeads'));
 const TasksDashboard = lazy(() => import('./pages/TasksDashboard'));
+const DocumentList = lazy(() => import('./pages/DocumentList'));
 
 /**
  * Which routes exist depends on who is signed in.
@@ -92,6 +93,10 @@ function AppRoutes() {
                         <Route index element={<Dashboard />} />
                         <Route path="weekly" element={<WeeklyDetail />} />
                         <Route path="quarterly" element={<QuarterlyAverages />} />
+                        {/* Keyed: the two lists are one component, and without a key
+                            moving from one to the other would keep the first one's
+                            search and rows. */}
+                        <Route path="devis/liste" element={<DocumentList key="devis" kind="devis" />} />
                     </>
                 ) : (
                     <Route index element={<Navigate to={home ?? '/settings'} replace />} />
@@ -103,6 +108,7 @@ function AppRoutes() {
                         <Route path="factures" element={<FDashboard />} />
                         <Route path="factures/weekly" element={<FWeeklyDetail />} />
                         <Route path="factures/quarterly" element={<FQuarterlyAverages />} />
+                        <Route path="factures/liste" element={<DocumentList key="factures" kind="factures" />} />
                     </>
                 )}
 

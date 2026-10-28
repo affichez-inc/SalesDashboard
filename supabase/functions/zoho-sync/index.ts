@@ -35,11 +35,8 @@ const DEPT_MAP: Record<string, string> = {
 // can also opt in with `x-store-all: true` without switching it on for the cron.
 const STORE_ALL_ENV = (Deno.env.get('QUOTES_STORE_ALL_STATUSES') ?? '').toLowerCase() === 'true';
 
-// Non-won quotes are stored from this date on. Older ones are walked (so orphan
-// detection still sees them) but not written, which keeps the table to the years
-// the dashboards actually offer. Won quotes are stored whatever their age, so
-// nothing that exists today stops being refreshed.
-const BACKFILL_START = '2025-01-01';
+// Every quote is stored whatever its age or status: the quote list (get_quote_list)
+// shows Zoho's whole history, and every revenue read filters on status.
 
 // A full walk covers every status over the whole history — roughly 20k estimates
 // across both orgs — which does not fit in one invocation. Requests are killed at
@@ -66,11 +63,6 @@ function mapStatus(raw: string): string | null {
   if (raw === 'draft') return 'draft';
   if (raw === 'expired') return 'expired';
   return null;
-}
-
-/** Won means it counts as revenue — the two statuses every revenue filter names. */
-function isWon(mapped: string | null): boolean {
-  return mapped === 'accepted' || mapped === 'invoiced';
 }
 
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
@@ -314,6 +306,148 @@ async function writeSyncState(key: string, ts: Date): Promise<void> {
   });
 }
 
+// ─── Row ──────────────────────────────────────────────────────────────────────
+
+/**
+ * The stored row for one estimate, from a list page or a detail read. The list
+ * carries custom fields at the top level (cf_d_partement); the detail only in
+ * custom_field_hash, which is also the only place it has the acceptance date.
+ * Null when the estimate has no date at all: sale_date is NOT NULL.
+ */
+function estimateRow(est: Record<string, unknown>, office: string): Record<string, unknown> | null {
+  const cf = (est.custom_field_hash ?? {}) as Record<string, unknown>;
+  const rawStatus = ((est.status as string) ?? '').toLowerCase();
+  const quoteDate = (est.date as string) || null;
+  const acceptedDate =
+    (est.cf_date_acceptation_unformatted as string) ||
+    (cf.cf_date_acceptation_unformatted as string) ||
+    (est.accepted_date as string) || null;
+  if (!quoteDate && !acceptedDate) return null;
+
+  const deptLabel = (est.cf_d_partement ?? est.department ?? cf.cf_d_partement_unformatted) as string;
+  return {
+    zoho_id: String(est.estimate_id),
+    // Unchanged formula, and it still means "when the money happened"
+    // for a won quote. For one that was never accepted it falls back
+    // to the issue date — which is why quote_date exists rather than
+    // this column being reused as a cohort date.
+    sale_date: acceptedDate || quoteDate,
+    quote_date: quoteDate,
+    accepted_date: acceptedDate,
+    client_name: est.customer_name,
+    // The Books customer, which the sales_fill_crm_account trigger
+    // resolves to a CRM account through zoho_books_customers.
+    books_customer_id: est.customer_id ? String(est.customer_id) : null,
+    // Zoho's total, taxes included. The sales_pretax_amount trigger
+    // derives amount as total minus Zoho's tax once zoho-pretax-sync has
+    // read it from the estimate's detail (the list carries no tax), and
+    // falls back to total / 1.14975 until then. amount is left out of
+    // the payload so a re-sync never overwrites an exact figure.
+    total_incl_tax: Number(est.total),
+    quote_number: est.estimate_number,
+    rep_name: (est.salesperson_name as string)?.trim() || null,
+    zoho_department_label: deptLabel ? String(deptLabel) : null,
+    department: DEPT_MAP[deptLabel] ?? null,
+    office,
+    zoho_status: rawStatus || null,
+    status: mapStatus(rawStatus),
+  };
+}
+
+// ─── Open quotes ──────────────────────────────────────────────────────────────
+//
+// Two changes to an open quote never reach the incremental sync, which reads
+// only what Books reports as modified: a draft or sent quote deleted in Books,
+// and one passing its expiry date, which turns expired without a new
+// last_modified_time (Books does the same to overdue invoices). Either way the
+// row stayed draft or sent here for good. At most once an hour this reads Books'
+// Draft and Sent lists, writes the quotes whose status differs here, and reads
+// back one by one every quote held as draft or sent that neither list carries:
+// a 404 removes the row, anything else rewrites it from the detail payload.
+
+const OPEN_CHECK_KEY = 'devis_open';
+const OPEN_CHECK_EVERY_MS = 60 * 60 * 1000;
+/** Detail reads per org and pass; the rest wait for the next pass. */
+const OPEN_RECHECK_MAX = 25;
+
+async function reconcileOpenQuotes(
+  org: { id: string; office: string },
+  accessToken: string,
+  dryRun: boolean,
+): Promise<{ complete: boolean; written: number; rewritten: number; removed: number; errors: string[] }> {
+  const errors: string[] = [];
+  const listed: Record<string, unknown>[] = [];
+  for (const filter of ['Draft', 'Sent']) {
+    for (let page = 1; ; page++) {
+      const url = `https://www.zohoapis.com/books/v3/estimates` +
+        `?organization_id=${org.id}&filter_by=Status.${filter}&page=${page}&per_page=200`;
+      const response = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}` } });
+      if (!response.ok) {
+        // A partial list would send quotes still open to a detail read for nothing.
+        errors.push(`${org.office} open ${filter} p.${page}: ${await response.text()}`);
+        return { complete: false, written: 0, rewritten: 0, removed: 0, errors };
+      }
+      const data = await response.json();
+      listed.push(...(data.estimates ?? []));
+      if (!(data.page_context as Record<string, boolean>)?.has_more_page) break;
+    }
+  }
+
+  // Paged until an empty page: a bare select stops at PostgREST's row cap.
+  const stored = new Map<string, string>();
+  for (let offset = 0; ; offset += 1000) {
+    const res = await fetch(
+      `${SUPABASE_URL}/rest/v1/sales?select=zoho_id,status&office=eq.${org.office}` +
+        `&status=in.(draft,sent)&order=zoho_id.asc&limit=1000&offset=${offset}`,
+      { headers: SB_HEADERS },
+    );
+    if (!res.ok) throw new Error('Open quote scan failed: ' + await res.text());
+    const page = await res.json() as Array<{ zoho_id: string; status: string }>;
+    if (page.length === 0) break;
+    for (const r of page) stored.set(r.zoho_id, r.status);
+  }
+
+  // Only what differs is written, so an unchanged hour fires no Realtime event.
+  const rows: object[] = [];
+  for (const est of listed) {
+    const row = estimateRow(est, org.office);
+    if (row && stored.get(row.zoho_id as string) !== row.status) rows.push(row);
+  }
+  if (!dryRun) for (let i = 0; i < rows.length; i += 200) await upsertBatch(rows.slice(i, i + 200));
+
+  const listedIds = new Set(listed.map((est) => String(est.estimate_id)));
+  const stale = [...stored.keys()].filter((id) => !listedIds.has(id));
+  let rewritten = 0;
+  let removed = 0;
+  for (const id of stale.slice(0, OPEN_RECHECK_MAX)) {
+    const response = await fetch(
+      `https://www.zohoapis.com/books/v3/estimates/${id}?organization_id=${org.id}`,
+      { headers: { Authorization: `Bearer ${accessToken}` } },
+    );
+    if (response.ok) {
+      const row = estimateRow(((await response.json()).estimate ?? {}) as Record<string, unknown>, org.office);
+      if (!row) { errors.push(`${org.office} open recheck ${id}: no date in Books, left as is`); continue; }
+      if (!dryRun) await upsertBatch([row]);
+      rewritten++;
+      continue;
+    }
+    let code: number | null = null;
+    try { code = Number((await response.json())?.code ?? NaN); } catch { /* non-JSON body */ }
+    // 1002 = not found. Anything else (401/429/500) is no answer: never delete on it.
+    if (response.status === 404 || code === 1002) {
+      if (!dryRun) await deleteBatch([id]);
+      removed++;
+    } else {
+      errors.push(`${org.office} open recheck ${id}: HTTP ${response.status}, left as is`);
+    }
+  }
+  if (stale.length > OPEN_RECHECK_MAX) {
+    errors.push(`${org.office} open recheck: ${stale.length - OPEN_RECHECK_MAX} left for the next pass`);
+  }
+
+  return { complete: true, written: rows.length, rewritten, removed, errors };
+}
+
 // ─── Main Handler ─────────────────────────────────────────────────────────────
 
 Deno.serve(async (req: Request) => {
@@ -367,7 +501,7 @@ Deno.serve(async (req: Request) => {
   let totalUpserted = 0;
   let totalDeleted = 0;
   let totalDeclined = 0;
-  let totalSkippedOld = 0;
+  let totalSkippedNoDate = 0;
   const byStatus: Record<string, number> = {};
   const unmapped: Record<string, number> = {};
   const errors: string[] = [];
@@ -481,45 +615,9 @@ Deno.serve(async (req: Request) => {
             }
 
             if (storeAll) {
-              const quoteDate = (est.date as string) || null;
-              const acceptedDate =
-                (est.cf_date_acceptation_unformatted as string) || (est.accepted_date as string) || null;
-
-              // Won quotes are stored whatever their age, so nothing that exists
-              // today stops being refreshed. Non-won ones start at BACKFILL_START:
-              // the dashboards only offer 2025 and 2026, and Zoho's estimates
-              // endpoint has no date filter to narrow the walk with, so the limit
-              // has to be applied here.
-              if (!isWon(mapped) && (!quoteDate || quoteDate < BACKFILL_START)) {
-                totalSkippedOld++;
-                continue;
-              }
-
-              const deptLabel = (est.cf_d_partement ?? est.department) as string;
-              toUpsert.push({
-                zoho_id: zohoId,
-                // Unchanged formula, and it still means "when the money happened"
-                // for a won quote. For one that was never accepted it falls back
-                // to the issue date — which is why quote_date exists rather than
-                // this column being reused as a cohort date.
-                sale_date: acceptedDate || quoteDate,
-                quote_date: quoteDate,
-                accepted_date: acceptedDate,
-                client_name: est.customer_name,
-                // Zoho's total, taxes included. The sales_pretax_amount trigger
-                // derives amount as total minus Zoho's tax once zoho-pretax-sync has
-                // read it from the estimate's detail (the list carries no tax), and
-                // falls back to total / 1.14975 until then. amount is left out of
-                // the payload so a re-sync never overwrites an exact figure.
-                total_incl_tax: Number(est.total),
-                quote_number: est.estimate_number,
-                rep_name: (est.salesperson_name as string)?.trim() || null,
-                zoho_department_label: deptLabel ? String(deptLabel) : null,
-                department: DEPT_MAP[deptLabel] ?? null,
-                office: org.office,
-                zoho_status: rawStatus || null,
-                status: mapped,
-              });
+              const row = estimateRow(est, org.office);
+              if (!row) { totalSkippedNoDate++; continue; }
+              toUpsert.push(row);
             } else if (rawStatus === 'accepted' || rawStatus.includes('invoiced') || rawStatus.includes('paid')) {
               // An unrecognised department no longer throws the quote away.
               // The old `if (department)` meant an estimate whose department
@@ -533,6 +631,7 @@ Deno.serve(async (req: Request) => {
                 zoho_id: zohoId,
                 sale_date: (est.cf_date_acceptation_unformatted as string) || (est.accepted_date as string) || (est.date as string),
                 client_name: est.customer_name,
+                books_customer_id: est.customer_id ? String(est.customer_id) : null,
                 total_incl_tax: Number(est.total), // amount: see the note above
                 quote_number: est.estimate_number,
                 rep_name: (est.salesperson_name as string)?.trim() || null,
@@ -632,6 +731,32 @@ Deno.serve(async (req: Request) => {
       await writeSyncState('devis', syncStart);
     }
 
+    // Open-quote pass, isolated: its failure must not fail the sync. The hourly
+    // pointer moves only after a clean pass over both orgs.
+    const open = { checked: false, written: 0, rewritten: 0, removed: 0 };
+    if (!isFullSync && storeAll) {
+      try {
+        const due = req.headers.get('x-open-check') === 'true' ||
+          Date.now() - (await readSyncState(OPEN_CHECK_KEY)).getTime() >= OPEN_CHECK_EVERY_MS;
+        if (due) {
+          const checkStart = new Date();
+          let clean = true;
+          for (const org of ORGS) {
+            const r = await reconcileOpenQuotes(org, accessToken, isDryRun);
+            open.written += r.written;
+            open.rewritten += r.rewritten;
+            open.removed += r.removed;
+            if (!r.complete) clean = false;
+            errors.push(...r.errors);
+          }
+          open.checked = true;
+          if (clean && !isDryRun) await writeSyncState(OPEN_CHECK_KEY, checkStart);
+        }
+      } catch (err) {
+        errors.push('open quotes: ' + (err instanceof Error ? err.message : String(err)));
+      }
+    }
+
     const durationMs = Date.now() - startTime;
     const result = {
       upserted: totalUpserted,
@@ -643,7 +768,9 @@ Deno.serve(async (req: Request) => {
       sweep: isSweep,
       walk_complete: walkComplete,
       seen: seenZohoIds.size,
-      ...(storeAll ? { by_status: byStatus, skipped_before_backfill: totalSkippedOld } : {}),
+      ...(storeAll ? { by_status: byStatus, skipped_no_date: totalSkippedNoDate } : {}),
+      ...(open.checked ? { open_checked: true, open_written: open.written,
+                           open_rewritten: open.rewritten, open_removed: open.removed } : {}),
       ...(Object.keys(unmapped).length > 0 ? { unmapped_statuses: unmapped } : {}),
       errors,
       duration_ms: durationMs,

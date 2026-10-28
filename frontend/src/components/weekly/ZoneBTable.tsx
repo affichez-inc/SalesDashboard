@@ -7,6 +7,7 @@ import { ExportButton } from '../ExportButton';
 import type { CsvColumn } from '../../lib/csv';
 import { RepName } from '../../components/RepAvatar';
 import { ShippingNote } from '../ShippingNote';
+import { DeptBadge, InvoiceStatusBadge } from '../documents/DocumentBadges';
 
 type AnyDetailRow = ZoneB_DetailRow | InvDetailRow;
 
@@ -49,16 +50,6 @@ export function ZoneBTable({ lineItems, module = 'devis' }: ZoneBTableProps) {
 
     const getNumber = (item: AnyDetailRow) =>
         module === 'factures' ? (item as InvDetailRow).invoice_number : (item as ZoneB_DetailRow).quote_number;
-
-    const DEPT_COLORS: Record<string, string> = {
-        'MULTI-ANNONCEURS':       'bg-data-2 text-data-2-ink border-data-2-edge',
-        'PROMOTIONNEL':           'bg-data-4 text-data-4-ink border-data-4-edge',
-        'DIST. PUBLICITAIRE SOLO':'bg-data-3 text-data-3-ink border-data-3-edge',
-        'NUMERIQUE':              'bg-data-6 text-data-6-ink border-data-6-edge',
-        'APPLICATION':            'bg-data-1 text-data-1-ink border-data-1-edge',
-        'SERVICES IA':            'bg-data-5 text-data-5-ink border-data-5-edge',
-        'EVENEMENT':              'bg-data-9 text-data-9-ink border-data-9-edge',
-    };
 
     return (
         <div className="bg-white rounded-xl shadow-card overflow-hidden">
@@ -134,7 +125,7 @@ export function ZoneBTable({ lineItems, module = 'devis' }: ZoneBTableProps) {
                                     <td className="px-3 md:px-5 py-2.5 md:py-3.5 text-ink-mute whitespace-nowrap text-2xs font-medium">{formatShortDate(getDate(item))}</td>
                                     <td className="px-3 md:px-5 py-2.5 md:py-3.5">
                                         {module === 'factures' ? (
-                                            <InvStatusBadge status={(item as InvDetailRow).status} isAvoir={isAvoir} />
+                                            <InvoiceStatusBadge status={(item as InvDetailRow).status} isAvoir={isAvoir} />
                                         ) : (
                                         <span className={cn(
                                             "inline-flex items-center px-2 py-0.5 rounded-xs text-2xs font-semibold uppercase tracking-tighter",
@@ -156,12 +147,7 @@ export function ZoneBTable({ lineItems, module = 'devis' }: ZoneBTableProps) {
                                     <td className="px-3 md:px-5 py-2.5 md:py-3.5 font-mono text-2xs text-ink-mute whitespace-nowrap">{getNumber(item)}</td>
                                     <td className="px-3 md:px-5 py-2.5 md:py-3.5 text-ink-secondary whitespace-nowrap font-medium"><RepName name={item.rep_name} size="sm" /></td>
                                     <td className="px-3 md:px-5 py-2.5 md:py-3.5">
-                                        <span className={cn(
-                                            "inline-flex items-center px-2 py-0.5 rounded-md text-2xs font-bold whitespace-nowrap border",
-                                            DEPT_COLORS[item.department] ?? 'bg-stone text-ink-secondary border-hairline-strong/50'
-                                        )}>
-                                            {item.department}
-                                        </span>
+                                        <DeptBadge department={item.department} />
                                     </td>
                                     <td className="px-3 md:px-5 py-2.5 md:py-3.5 text-center">
                                         <a
@@ -193,30 +179,5 @@ export function ZoneBTable({ lineItems, module = 'devis' }: ZoneBTableProps) {
                 </table>
             </div>
         </div>
-    );
-}
-
-const INV_STATUS_STYLES: Record<string, string> = {
-    paid:    'bg-tone-good-soft text-tone-good-ink border-tone-good/30',
-    partial: 'bg-tone-warn-soft text-tone-warn-ink border-tone-warn/30',
-    sent:    'bg-tone-warn-soft text-tone-warn-ink border-tone-warn/30',
-    viewed:  'bg-tone-warn-soft text-tone-warn-ink border-tone-warn/30',
-    overdue: 'bg-tone-critical-soft text-tone-critical-ink border-tone-critical/30',
-    avoir:   'bg-tone-critical-soft text-tone-critical-ink border-tone-critical/30',
-};
-const INV_STATUS_LABELS: Record<string, string> = {
-    paid: 'Payé', partial: 'Partiel', sent: 'Envoyé',
-    viewed: 'Envoyé', overdue: 'En retard', avoir: 'Avoir',
-};
-
-function InvStatusBadge({ status, isAvoir }: { status: string; isAvoir: boolean }) {
-    const key = isAvoir ? 'avoir' : status;
-    return (
-        <span className={cn(
-            "inline-flex items-center px-2 py-0.5 rounded-xs text-2xs font-semibold uppercase tracking-tighter border",
-            INV_STATUS_STYLES[key] ?? 'bg-stone text-ink-secondary border-hairline-strong'
-        )}>
-            {INV_STATUS_LABELS[key] ?? key}
-        </span>
     );
 }

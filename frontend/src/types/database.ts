@@ -869,3 +869,53 @@ export type AdSpendStatusRow = {
     total_spend: number;
     last_synced: string | null;
 };
+
+/** get_invoice_list - every stored invoice and credit note, one page at a time. */
+export type InvoiceListRow = {
+    zoho_id: string;
+    invoice_number: string | null;
+    invoice_date: string | null;
+    client_name: string;
+    /** Before tax; negative on a credit note. */
+    amount: number;
+    /** Zoho's shipping charge before tax, already inside `amount`. */
+    shipping_charge: number | null;
+    rep_name: string | null;
+    /** NULL when Zoho's label has no mapping, or there is none. */
+    department: string | null;
+    zoho_department_label: string | null;
+    office: 'QC' | 'MTL' | null;
+    status: string;
+    is_avoir: boolean;
+};
+
+/** get_quote_list - every stored quote, any status, one page at a time. */
+export type QuoteListRow = {
+    zoho_id: string;
+    quote_number: string | null;
+    /** When the quote was issued. */
+    quote_date: string | null;
+    accepted_date: string | null;
+    client_name: string;
+    amount: number;
+    rep_name: string | null;
+    department: string | null;
+    zoho_department_label: string | null;
+    office: 'QC' | 'MTL';
+    /** NULL when the sync did not recognise Zoho's status; zoho_status holds it. */
+    status: string | null;
+    zoho_status: string | null;
+};
+
+/** One page of a document list, with the size and total of the whole filtered set. */
+export type DocumentListPage<T> = {
+    total_count: number;
+    total_amount: number;
+    rows: T[];
+};
+
+/** get_document_list_options - the years and rep names in one table. */
+export type DocumentListOptions = {
+    years: number[];
+    reps: string[];
+};

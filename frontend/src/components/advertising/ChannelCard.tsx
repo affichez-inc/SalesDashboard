@@ -2,8 +2,8 @@ import { DollarSign, Building2, Receipt, MousePointerClick } from 'lucide-react'
 import type { AdPerformanceRow } from '../../types/database';
 import { formatCurrencyCAD, cn } from '../../lib/utils';
 import { InfoHint } from '../InfoHint';
-import { channelLabel, isCohortOpen, formatReturn, formatAdDay, cohortBoundsLabel, viewHasSpend } from './channel';
-import type { AdView } from './channel';
+import { channelLabel, isCohortOpen, formatReturn, formatAdDay, cohortBoundsLabel, viewHasSpend, BASIS_WORDS } from './channel';
+import type { AdBasis, AdView } from './channel';
 import { ChannelLogoTile } from './ChannelLogo';
 
 /**
@@ -14,6 +14,9 @@ import { ChannelLogoTile } from './ChannelLogo';
  * ad spend to be measured against: revenue as the headline, accounts and
  * revenue per account below, and no spend anywhere.
  *
+ * `basis` only changes the words: what the accounts invoiced, or the quotes
+ * they accepted. The figures arrive already computed on that basis.
+ *
  * While the attribution window is open the return is shown muted and labelled,
  * rather than hidden, so it is not recomputed by hand from the figures below.
  *
@@ -21,12 +24,14 @@ import { ChannelLogoTile } from './ChannelLogo';
  * region. Spend cannot be filtered that way, so the RPC returns no cost and no
  * return, and the card says why instead of blaming a missing import.
  */
-export function ChannelCard({ row, windowLabel, view, narrowed = false }: {
+export function ChannelCard({ row, windowLabel, view, basis, narrowed = false }: {
     row: AdPerformanceRow;
     windowLabel: string;
     view: AdView;
+    basis: AdBasis;
     narrowed?: boolean;
 }) {
+    const words = BASIS_WORDS[basis];
     const organic = !viewHasSpend(view);
     const open = isCohortOpen(row.window_ends_on);
     const hasSpend = row.spend > 0;
@@ -56,7 +61,7 @@ export function ChannelCard({ row, windowLabel, view, narrowed = false }: {
                 <>
                     <div className="px-5 py-5 border-b border-hairline bg-sand/60">
                         <p className="text-2xs font-semibold text-ink-mute uppercase tracking-eyebrow">
-                            Revenus attribués
+                            {words.revenue}
                         </p>
                         {row.accounts_created === 0 ? (
                             <>
@@ -75,7 +80,7 @@ export function ChannelCard({ row, windowLabel, view, narrowed = false }: {
                                                  open ? 'text-tone-warn-ink' : 'text-ink-mute')}>
                                     {open
                                         ? `Cohorte en cours — fenêtre complète le ${formatAdDay(row.window_ends_on)}`
-                                        : `Facturé dans les ${windowLabel}`}
+                                        : `${words.inWindow} ${windowLabel}`}
                                 </p>
                             </>
                         )}
@@ -87,14 +92,14 @@ export function ChannelCard({ row, windowLabel, view, narrowed = false }: {
                             icon={Building2}
                             label="Comptes créés"
                             value={row.accounts_created.toLocaleString('fr-CA')}
-                            sub={`${row.accounts_invoiced} facturé${plural(row.accounts_invoiced)}${invoicedShare !== null ? ` (${invoicedShare} %)` : ''}`}
+                            sub={`${words.countedSub(row.accounts_invoiced, false)}${invoicedShare !== null ? ` (${invoicedShare} %)` : ''}`}
                         />
                         <Stat
                             icon={Receipt}
                             label="Revenu par compte"
                             value={row.revenue_per_account !== null ? formatCurrencyCAD(row.revenue_per_account) : '—'}
                             sub="tous les comptes créés, même sans achat"
-                            hint="Revenus attribués ÷ comptes créés sur la période, la même mesure que sur Comptes."
+                            hint={`${words.revenue} ÷ comptes créés sur la période, la même mesure que sur Comptes.`}
                         />
                     </div>
                 </>
@@ -125,7 +130,7 @@ export function ChannelCard({ row, windowLabel, view, narrowed = false }: {
                                                  open ? 'text-tone-warn-ink' : 'text-ink-mute')}>
                                     {open
                                         ? `Cohorte en cours — fenêtre complète le ${formatAdDay(row.window_ends_on)}`
-                                        : `Facturé dans les ${windowLabel}`}
+                                        : `${words.inWindow} ${windowLabel}`}
                                 </p>
                             </>
                         )}
@@ -142,9 +147,9 @@ export function ChannelCard({ row, windowLabel, view, narrowed = false }: {
                         />
                         <Stat
                             icon={Receipt}
-                            label="Revenus attribués"
+                            label={words.revenue}
                             value={formatCurrencyCAD(row.revenue_attributed)}
-                            sub={`${row.accounts_invoiced} compte${plural(row.accounts_invoiced)} facturé${plural(row.accounts_invoiced)}`}
+                            sub={words.countedSub(row.accounts_invoiced, true)}
                         />
                     </div>
 
@@ -160,8 +165,8 @@ export function ChannelCard({ row, windowLabel, view, narrowed = false }: {
                             icon={Building2}
                             label="Coût par client"
                             value={row.cost_per_client !== null ? formatCurrencyCAD(row.cost_per_client) : '—'}
-                            sub={invoicedShare !== null ? `${invoicedShare} % ont facturé` : '—'}
-                            hint="Dépense ÷ comptes qui ont été facturés."
+                            sub={invoicedShare !== null ? `${invoicedShare} % ${words.countedShare}` : '—'}
+                            hint={words.clientHint}
                         />
                     </div>
 

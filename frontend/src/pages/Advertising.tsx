@@ -21,10 +21,11 @@ import { SpendVsRevenueChart } from '../components/advertising/SpendVsRevenueCha
 import { CampaignTable } from '../components/advertising/CampaignTable';
 import {
     CHANNEL_LABEL, CHANNELS, AD_VIEWS, AD_VIEW_PARAM, DEFAULT_AD_VIEW,
-    channelLabel, isCohortOpen, parseAdView, viewHasSpend, formatAdDay,
+    AD_BASES, AD_BASIS_PARAM, DEFAULT_AD_BASIS, BASIS_WORDS,
+    channelLabel, isCohortOpen, parseAdView, parseAdBasis, viewHasSpend, formatAdDay,
     adAccountLabel, inAdAccountSelection, narrowingAdAccounts,
 } from '../components/advertising/channel';
-import type { AdView } from '../components/advertising/channel';
+import type { AdBasis, AdView } from '../components/advertising/channel';
 import { ChannelLogo, ChannelLogoTile } from '../components/advertising/ChannelLogo';
 import { AdvertisingIcon } from '../components/advertising/AdvertisingIcon';
 
@@ -40,6 +41,11 @@ import { AdvertisingIcon } from '../components/advertising/AdvertisingIcon';
  *   inconnu   — Google only: the "Google Organique" accounts created before
  *               that source was reserved for organic arrivals. They mix paid
  *               and organic, so they are shown apart and counted in neither.
+ *
+ * Two tabs above the views choose what the accounts "bought": Factures (their
+ * invoices, net of credit notes) or Devis (their won quotes, dated by
+ * acceptance). The screen is the same on both; only the documents summed
+ * change (p_basis).
  *
  * Attribution is by channel and by month of account creation. Revenue for a
  * period keeps accruing until its attribution window closes, so figures from an
@@ -88,10 +94,17 @@ const YEAR_OPTIONS = [
         .map(y => ({ value: String(y), label: String(y) })),
 ];
 
-const SUBTITLE: Record<AdView, string> = {
-    organique: 'Les comptes venus de Google ou de Facebook sans publicité, et ce qu’ils ont facturé',
-    payant: 'Ce que la publicité coûte, et ce que les comptes qu’elle a ramenés ont facturé',
-    inconnu: 'Les comptes Google d’avant la séparation entre organique et payant, et ce qu’ils ont facturé',
+const SUBTITLE: Record<AdBasis, Record<AdView, string>> = {
+    factures: {
+        organique: 'Les comptes venus de Google ou de Facebook sans publicité, et ce qu’ils ont facturé',
+        payant: 'Ce que la publicité coûte, et ce que les comptes qu’elle a ramenés ont facturé',
+        inconnu: 'Les comptes Google d’avant la séparation entre organique et payant, et ce qu’ils ont facturé',
+    },
+    devis: {
+        organique: 'Les comptes venus de Google ou de Facebook sans publicité, et les devis qu’ils ont acceptés',
+        payant: 'Ce que la publicité coûte, et les devis acceptés par les comptes qu’elle a ramenés',
+        inconnu: 'Les comptes Google d’avant la séparation entre organique et payant, et les devis qu’ils ont acceptés',
+    },
 };
 
 export default function Advertising() {
@@ -99,6 +112,10 @@ export default function Advertising() {
     const view = parseAdView(viewParam);
     const hasSpend = viewHasSpend(view);
     const viewArg = AD_VIEW_PARAM[view];
+
+    const [basisParam, setBasisParam] = useUrlState('donnees', DEFAULT_AD_BASIS);
+    const basis = parseAdBasis(basisParam);
+    const basisArg = AD_BASIS_PARAM[basis];
 
     const [yearParam, setYearParam] = useUrlState('year', String(CURRENT_YEAR));
     const year: number | 'Toutes' = yearParam === 'Toutes' ? 'Toutes' : Number(yearParam);
@@ -223,6 +240,8 @@ export default function Advertising() {
             // Sent only when set, so the page still reads a database that does
             // not have the parameter yet.
             ...(adAccountsParam ? { p_ad_accounts: adAccountsParam } : {}),
+            // Invoices are the default: only the Devis tab names its basis.
+            ...(basisArg === 'quotes' ? { p_basis: basisArg } : {}),
         };
 
         const [
@@ -251,7 +270,7 @@ export default function Advertising() {
         setCampaigns((campaignData as AdCampaignRow[]) ?? []);
         setStatus((statusData as AdSpendStatusRow[]) ?? []);
         setLoading(false);
-    }, [yearValue, monthValue, windowMonths, excludeRatings, viewArg, hasSpend, waitingForOptions,
+    }, [yearValue, monthValue, windowMonths, excludeRatings, viewArg, basisArg, hasSpend, waitingForOptions,
         repsParam, sourcesParam, servicesParam, domainesParam, regionsParam, adAccountsParam]);
 
     // eslint-disable-next-line react-hooks/set-state-in-effect
@@ -325,28 +344,46 @@ export default function Advertising() {
                         <h1 className="text-xl md:text-2xl font-semibold text-ink tracking-tight">
                             Publicité
                         </h1>
-                        <p className="text-xs md:text-sm text-ink-mute mt-0.5">{SUBTITLE[view]}</p>
+                        <p className="text-xs md:text-sm text-ink-mute mt-0.5">{SUBTITLE[basis][view]}</p>
                     </div>
                 </div>
 
-                <div className="flex gap-1 bg-stone p-0.5 rounded-md self-start md:self-auto" role="tablist"
-                     aria-label="Vue">
-                    {AD_VIEWS.map(v => (
-                        <button
-                            key={v.value}
-                            role="tab"
-                            aria-selected={view === v.value}
-                            // The sources differ from one view to the next, so the
-                            // source selection does not follow.
-                            onClick={() => { setOptions(null); setViewParam(v.value, { source: null }); }}
-                            className={cn(
-                                'px-4 py-1.5 rounded-md text-xs font-semibold whitespace-nowrap transition-all',
-                                view === v.value ? 'bg-white text-ink shadow-card' : 'text-ink-mute hover:text-ink-secondary',
-                            )}
-                        >
-                            {v.label}
-                        </button>
-                    ))}
+                <div className="flex flex-wrap gap-2 self-start md:self-auto">
+                    <div className="flex gap-1 bg-stone p-0.5 rounded-md" role="tablist" aria-label="Données">
+                        {AD_BASES.map(b => (
+                            <button
+                                key={b.value}
+                                role="tab"
+                                aria-selected={basis === b.value}
+                                // Every filter applies to both: only the documents change.
+                                onClick={() => setBasisParam(b.value)}
+                                className={cn(
+                                    'px-4 py-1.5 rounded-md text-xs font-semibold whitespace-nowrap transition-all',
+                                    basis === b.value ? 'bg-white text-ink shadow-card' : 'text-ink-mute hover:text-ink-secondary',
+                                )}
+                            >
+                                {b.label}
+                            </button>
+                        ))}
+                    </div>
+                    <div className="flex gap-1 bg-stone p-0.5 rounded-md" role="tablist" aria-label="Vue">
+                        {AD_VIEWS.map(v => (
+                            <button
+                                key={v.value}
+                                role="tab"
+                                aria-selected={view === v.value}
+                                // The sources differ from one view to the next, so the
+                                // source selection does not follow.
+                                onClick={() => { setOptions(null); setViewParam(v.value, { source: null }); }}
+                                className={cn(
+                                    'px-4 py-1.5 rounded-md text-xs font-semibold whitespace-nowrap transition-all',
+                                    view === v.value ? 'bg-white text-ink shadow-card' : 'text-ink-mute hover:text-ink-secondary',
+                                )}
+                            >
+                                {v.label}
+                            </button>
+                        ))}
+                    </div>
                 </div>
             </div>
 
@@ -452,17 +489,19 @@ export default function Advertising() {
                     <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 md:gap-6" translate="no">
                         {perf.map(row => (
                             <ChannelCard key={row.channel} row={row} windowLabel={windowLabel}
-                                         view={view} narrowed={narrowed} />
+                                         view={view} basis={basis} narrowed={narrowed} />
                         ))}
                     </div>
 
                     {/* One channel has nothing to be compared with. */}
                     {perf.length > 1 && (
-                        <ComparisonTable rows={perf} windowLabel={windowLabel} openCohort={openCohort} view={view} />
+                        <ComparisonTable rows={perf} windowLabel={windowLabel} openCohort={openCohort}
+                                         view={view} basis={basis} />
                     )}
 
                     {year !== 'Toutes' && (
-                        <SpendVsRevenueChart rows={monthly} year={year} windowLabel={windowLabel} view={view} />
+                        <SpendVsRevenueChart rows={monthly} year={year} windowLabel={windowLabel}
+                                             view={view} basis={basis} />
                     )}
 
                     {hasSpend && (
@@ -609,12 +648,14 @@ function PartialNotice({ channels }: { channels: AdChannel[] }) {
 // ─── Side-by-side comparison ──────────────────────────────────────────────────
 
 /** Both channels side by side. */
-function ComparisonTable({ rows, windowLabel, openCohort, view }: {
+function ComparisonTable({ rows, windowLabel, openCohort, view, basis }: {
     rows: AdPerformanceRow[];
     windowLabel: string;
     openCohort: boolean;
     view: AdView;
+    basis: AdBasis;
 }) {
+    const words = BASIS_WORDS[basis];
     const organic = !viewHasSpend(view);
     const best = useMemo(() => {
         if (organic) return null;
@@ -630,8 +671,8 @@ function ComparisonTable({ rows, windowLabel, openCohort, view }: {
                     {organic ? 'Comparaison des deux sources organiques' : 'Comparaison des deux canaux'}
                 </h3>
                 <InfoHint text={organic
-                    ? `Comptes créés dans la période choisie avec cette origine, et ce qu'ils ont facturé dans les ${windowLabel}. Le revenu par compte divise par tous les comptes créés, y compris ceux qui n'ont rien acheté.`
-                    : `Dépenses de la période choisie, comparées aux comptes créés dans cette même période et à ce qu'ils ont facturé dans les ${windowLabel}. Le coût par compte divise la dépense par tous les comptes créés, y compris ceux qui n'ont rien acheté.`} />
+                    ? `Comptes créés dans la période choisie avec cette origine, et ${words.what} dans les ${windowLabel}. Le revenu par compte divise par tous les comptes créés, y compris ceux qui n'ont rien acheté.`
+                    : `Dépenses de la période choisie, comparées aux comptes créés dans cette même période et à ${words.what} dans les ${windowLabel}. Le coût par compte divise la dépense par tous les comptes créés, y compris ceux qui n'ont rien acheté.`} />
                 {openCohort && (
                     <span className="text-2xs font-semibold px-2 py-0.5 rounded-full bg-tone-warn-soft text-tone-warn-ink">
                         Cohorte en cours
@@ -647,8 +688,8 @@ function ComparisonTable({ rows, windowLabel, openCohort, view }: {
                             {!organic && <Th>Dépense</Th>}
                             <Th>Comptes</Th>
                             {!organic && <Th>Coût / compte</Th>}
-                            <Th>Facturés</Th>
-                            {organic && <Th>% facturés</Th>}
+                            <Th>{words.counted}</Th>
+                            {organic && <Th>% {words.counted.toLowerCase()}</Th>}
                             {!organic && <Th>Coût / client</Th>}
                             <Th>Revenus</Th>
                             <Th>Revenu / compte</Th>
@@ -723,12 +764,12 @@ function ComparisonTable({ rows, windowLabel, openCohort, view }: {
 
             <p className="px-5 py-3 text-2xs text-ink-mute border-t border-hairline leading-relaxed">
                 {organic ? (
-                    <>« Revenu / compte » = revenus facturés par les comptes créés sur la période ÷ tous
+                    <>« Revenu / compte » = {words.legend.toLowerCase()} par les comptes créés sur la période ÷ tous
                     ces comptes, même ceux qui n&rsquo;ont rien acheté. En gris : fenêtre de revenus pas
                     encore terminée.</>
                 ) : (
-                    <>« Coût / compte » est l&rsquo;équivalent du coût par lead. « Rendement » = revenus
-                    facturés par les comptes créés sur la période ÷ dépense publicitaire de la période.
+                    <>« Coût / compte » est l&rsquo;équivalent du coût par lead. « Rendement » = {words.legend.toLowerCase()}
+                    {' '}par les comptes créés sur la période ÷ dépense publicitaire de la période.
                     1,00 × signifie que la publicité s&rsquo;est payée elle-même, sans compter les coûts de
                     production ni les commissions. En gris : fenêtre de revenus pas encore terminée.</>
                 )}

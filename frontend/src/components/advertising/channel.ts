@@ -49,6 +49,85 @@ export function viewHasSpend(view: AdView): boolean {
 }
 
 /**
+ * What an account "bought", for every figure on the page: its invoices, net of
+ * credit notes, or its won quotes (accepted or invoiced, dated by acceptance,
+ * the rule of the Devis screens). Accounts, spend and the window are the same
+ * on both; only the documents summed change (p_basis in get_ad_performance and
+ * get_ad_monthly).
+ */
+export type AdBasis = 'factures' | 'devis';
+
+export const DEFAULT_AD_BASIS: AdBasis = 'factures';
+
+export const AD_BASES: { value: AdBasis; label: string }[] = [
+    { value: 'factures', label: 'Factures' },
+    { value: 'devis',    label: 'Devis' },
+];
+
+/** The `p_basis` value of each basis. */
+export const AD_BASIS_PARAM: Record<AdBasis, 'invoices' | 'quotes'> = {
+    factures: 'invoices',
+    devis: 'quotes',
+};
+
+export function parseAdBasis(value: string): AdBasis {
+    return AD_BASES.some(b => b.value === value) ? (value as AdBasis) : DEFAULT_AD_BASIS;
+}
+
+/** The words that change with the basis. Everything else on the page reads the same. */
+export type BasisWords = {
+    /** Column header for the accounts counted: "Facturés". */
+    counted: string;
+    /** The same accounts named in full, for an export: "Comptes facturés". */
+    countedAccounts: string;
+    /** "3 facturés", "1 compte facturé": the accounts counted, after a number. */
+    countedSub: (n: number, withNoun: boolean) => string;
+    /** "ont facturé", after a share: "12 % ont facturé". */
+    countedShare: string;
+    /** Label of the money figure: "Revenus attribués". */
+    revenue: string;
+    /** Chart legend: "Revenus facturés". */
+    legend: string;
+    /** "facturé dans les 12 mois…", before the window. */
+    inWindow: string;
+    /** "ce qu'ils ont facturé", closing a sentence about the accounts. */
+    what: string;
+    /** "Dépense ÷ comptes qui ont été facturés." */
+    clientHint: string;
+};
+
+const plural = (n: number) => (n > 1 ? 's' : '');
+
+export const BASIS_WORDS: Record<AdBasis, BasisWords> = {
+    factures: {
+        counted: 'Facturés',
+        countedAccounts: 'Comptes facturés',
+        countedSub: (n, withNoun) => withNoun
+            ? `${n} compte${plural(n)} facturé${plural(n)}`
+            : `${n} facturé${plural(n)}`,
+        countedShare: 'ont facturé',
+        revenue: 'Revenus attribués',
+        legend: 'Revenus facturés',
+        inWindow: 'Facturé dans les',
+        what: 'ce qu’ils ont facturé',
+        clientHint: 'Dépense ÷ comptes qui ont été facturés.',
+    },
+    devis: {
+        counted: 'Devis acceptés',
+        countedAccounts: 'Comptes avec devis accepté',
+        countedSub: (n, withNoun) => withNoun
+            ? `${n} compte${plural(n)} avec devis accepté`
+            : `${n} avec devis accepté`,
+        countedShare: 'ont accepté un devis',
+        revenue: 'Devis acceptés attribués',
+        legend: 'Devis acceptés',
+        inWindow: 'Accepté dans les',
+        what: 'la valeur des devis qu’ils ont acceptés',
+        clientHint: 'Dépense ÷ comptes qui ont accepté au moins un devis.',
+    },
+};
+
+/**
  * What a channel is called in each view. The organic words are the Zoho source
  * values themselves, so a card title and the "Origine" line under it read the
  * same.

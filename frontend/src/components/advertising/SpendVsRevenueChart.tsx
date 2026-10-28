@@ -5,8 +5,8 @@ import { InfoHint } from '../InfoHint';
 import { ExportButton } from '../ExportButton';
 import type { CsvColumn } from '../../lib/csv';
 import { formatCurrencyCAD, cn } from '../../lib/utils';
-import { CHANNELS, CHANNEL_TONE, channelLabel, isCohortOpen, viewHasSpend } from './channel';
-import type { AdView } from './channel';
+import { CHANNELS, CHANNEL_TONE, BASIS_WORDS, channelLabel, isCohortOpen, viewHasSpend } from './channel';
+import type { AdBasis, AdView, BasisWords } from './channel';
 import { ChannelLogo } from './ChannelLogo';
 
 // Distinct short labels: slicing the full names gives "Jui" for both June and July.
@@ -20,15 +20,19 @@ const MONTH_SHORT = ['Janv', 'Févr', 'Mars', 'Avr', 'Mai', 'Juin', 'Juil', 'Ao�
  * Outside the paid view there is no spend: only the revenue bars are drawn and
  * the cost and return columns are left out, rather than shown as zero.
  *
+ * `basis` names what the revenue bars hold: invoices, or won quotes.
+ *
  * The channel tabs list the channels the rows actually contain: the "inconnu"
  * view has Google alone, and a source filter can leave a single channel.
  */
-export function SpendVsRevenueChart({ rows, year, windowLabel, view }: {
+export function SpendVsRevenueChart({ rows, year, windowLabel, view, basis }: {
     rows: AdMonthlyRow[];
     year: number;
     windowLabel: string;
     view: AdView;
+    basis: AdBasis;
 }) {
+    const words = BASIS_WORDS[basis];
     const organic = !viewHasSpend(view);
     const channels = useMemo(() => {
         const present = CHANNELS.filter(c => rows.some(r => r.channel === c));
@@ -64,6 +68,7 @@ export function SpendVsRevenueChart({ rows, year, windowLabel, view }: {
     const hasOpen = data.some(d => d.revenue > 0 && d.open);
     const max = Math.max(1, ...data.map(d => Math.max(d.spend, d.revenue)));
     const tone = CHANNEL_TONE[channel];
+    const csvColumns = useMemo(() => csvColumnsFor(words, !organic), [words, organic]);
 
     const W = 1000, H = 260, PAD_L = 64, PAD_R = 12, PAD_T = 16, PAD_B = 26;
     const plotW = W - PAD_L - PAD_R;
@@ -83,8 +88,8 @@ export function SpendVsRevenueChart({ rows, year, windowLabel, view }: {
                     {organic ? 'Comptes et revenus, mois par mois' : 'Dépense et revenus, mois par mois'} · {year}
                 </h3>
                 <InfoHint text={organic
-                    ? `Pour chaque mois : les comptes « ${label} » créés dans ce mois, et ce qu'ils ont facturé dans les ${windowLabel}. Les mois hachurés n'ont pas encore une fenêtre complète : leurs revenus vont encore augmenter et ne doivent pas être comparés aux mois pleins.`
-                    : `Pour chaque mois : ce qui a été dépensé sur ${label} dans ce mois, et ce que les comptes créés dans ce même mois ont facturé dans les ${windowLabel}. Les mois hachurés n'ont pas encore une fenêtre complète : leurs revenus vont encore augmenter, donc leur rendement est sous-estimé et ne doit pas être comparé aux mois pleins.`} />
+                    ? `Pour chaque mois : les comptes « ${label} » créés dans ce mois, et ${words.what} dans les ${windowLabel}. Les mois hachurés n'ont pas encore une fenêtre complète : leurs revenus vont encore augmenter et ne doivent pas être comparés aux mois pleins.`
+                    : `Pour chaque mois : ce qui a été dépensé sur ${label} dans ce mois, et, pour les comptes créés dans ce même mois, ${words.what} dans les ${windowLabel}. Les mois hachurés n'ont pas encore une fenêtre complète : leurs revenus vont encore augmenter, donc leur rendement est sous-estimé et ne doit pas être comparé aux mois pleins.`} />
 
                 <div className="ml-auto flex items-center gap-3">
                     {channels.length > 1 && (
@@ -106,8 +111,8 @@ export function SpendVsRevenueChart({ rows, year, windowLabel, view }: {
                         ))}
                     </div>
                     )}
-                    <ExportButton rows={data} columns={organic ? CSV_ORGANIC : CSV}
-                                  filename={`publicite_${view}_${channel}_${year}`}
+                    <ExportButton rows={data} columns={csvColumns}
+                                  filename={`publicite_${basis}_${view}_${channel}_${year}`}
                                   disabled={!hasAnything} />
                 </div>
             </div>
@@ -121,7 +126,7 @@ export function SpendVsRevenueChart({ rows, year, windowLabel, view }: {
             ) : (
                 <>
                     <div className="px-5 pt-4">
-                        <Legend tone={tone} complete={hasComplete} open={hasOpen} spend={!organic} />
+                        <Legend tone={tone} complete={hasComplete} open={hasOpen} spend={!organic} label={words.legend} />
                         <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none"
                              className="w-full h-[260px]" role="img"
                              aria-label={`${organic ? 'Revenus' : 'Dépense et revenus'} par mois pour ${label} en ${year}`}>
@@ -189,7 +194,7 @@ export function SpendVsRevenueChart({ rows, year, windowLabel, view }: {
                                     {!organic && <th className={th}>Dépense</th>}
                                     <th className={th}>Comptes</th>
                                     {!organic && <th className={th}>Coût / compte</th>}
-                                    <th className={th}>Facturés</th>
+                                    <th className={th}>{words.counted}</th>
                                     <th className={th}>Revenus</th>
                                     {!organic && <th className={cn(th, 'pl-2')}>Rendement</th>}
                                 </tr>
@@ -247,8 +252,8 @@ export function SpendVsRevenueChart({ rows, year, windowLabel, view }: {
     );
 }
 
-function Legend({ tone, complete, open, spend }: {
-    tone: { ink: string }; complete: boolean; open: boolean; spend: boolean;
+function Legend({ tone, complete, open, spend, label }: {
+    tone: { ink: string }; complete: boolean; open: boolean; spend: boolean; label: string;
 }) {
     return (
         <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-2xs font-semibold text-ink-mute mb-1" translate="no">
@@ -261,7 +266,7 @@ function Legend({ tone, complete, open, spend }: {
             {complete && (
                 <span className="flex items-center gap-1.5">
                     <span className="h-2.5 w-3 rounded-xs" style={{ backgroundColor: tone.ink }} />
-                    Revenus facturés
+                    {label}
                 </span>
             )}
             {open && (
@@ -276,7 +281,7 @@ function Legend({ tone, complete, open, spend }: {
                         </defs>
                         <rect width="12" height="10" rx="2" fill="url(#legend-hatch)" strokeWidth="1" style={{ stroke: tone.ink }} />
                     </svg>
-                    Revenus facturés — encore en cours
+                    {label} — encore en cours
                 </span>
             )}
         </div>
@@ -288,21 +293,16 @@ type Row = {
     revenue: number; costPerAccount: number | null; roas: number | null; open: boolean;
 };
 
-const CSV: CsvColumn<Row>[] = [
-    { header: 'Mois',                value: d => d.label },
-    { header: 'Dépense',             value: d => d.spend },
-    { header: 'Comptes créés',       value: d => d.accounts },
-    { header: 'Coût par compte',     value: d => d.costPerAccount },
-    { header: 'Comptes facturés',    value: d => d.invoiced },
-    { header: 'Revenus attribués',   value: d => d.revenue },
-    { header: 'Rendement',           value: d => d.roas },
-    { header: 'Fenêtre en cours',    value: d => d.open ? 'oui' : 'non' },
-];
-
-const CSV_ORGANIC: CsvColumn<Row>[] = [
-    { header: 'Mois',                value: d => d.label },
-    { header: 'Comptes créés',       value: d => d.accounts },
-    { header: 'Comptes facturés',    value: d => d.invoiced },
-    { header: 'Revenus attribués',   value: d => d.revenue },
-    { header: 'Fenêtre en cours',    value: d => d.open ? 'oui' : 'non' },
-];
+/** The file says what the screen says: spend columns in the paid view only, the basis in the headers. */
+function csvColumnsFor(words: BasisWords, spend: boolean): CsvColumn<Row>[] {
+    return [
+        { header: 'Mois',                value: d => d.label },
+        ...(spend ? [{ header: 'Dépense', value: (d: Row) => d.spend }] : []),
+        { header: 'Comptes créés',       value: d => d.accounts },
+        ...(spend ? [{ header: 'Coût par compte', value: (d: Row) => d.costPerAccount }] : []),
+        { header: words.countedAccounts,  value: d => d.invoiced },
+        { header: words.revenue,         value: d => d.revenue },
+        ...(spend ? [{ header: 'Rendement', value: (d: Row) => d.roas }] : []),
+        { header: 'Fenêtre en cours',    value: d => d.open ? 'oui' : 'non' },
+    ];
+}

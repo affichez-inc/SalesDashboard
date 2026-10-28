@@ -5,6 +5,7 @@ import { cachedRpc, invalidateRpcCache } from '../lib/rpcCache';
 import { useUrlList, useUrlState, useUrlStateNumber } from '../hooks/useUrlState';
 import { useRepFilter, REP_ALL_LABEL } from '../hooks/useRepFilter';
 import { useRepTeam } from '../lib/repTeam';
+import { DEPARTMENTS, MONTHS, OFFICES } from '../lib/constants';
 import { FilterBar, FilterGroup } from '../components/FilterBar';
 import { Select } from '../components/Select';
 import { MultiSelect } from '../components/MultiSelect';
@@ -19,8 +20,8 @@ import {
     INVOICE_STATUS_OPTIONS, QUOTE_STATUS_OPTIONS, invoiceStatusLabel, quoteStatusLabel,
 } from '../components/documents/documentStatus';
 import {
-    DOCUMENT_LIST_RPC, DOCUMENT_OPTIONS_KIND, DOCUMENT_PAGE_SIZE, documentListArgs,
-    type DocumentKind, type DocumentListQuery,
+    DOCUMENT_LIST_RPC, DOCUMENT_OPTIONS_KIND, DOCUMENT_PAGE_SIZE, SORT_PARAM, documentListArgs, sortFromParam,
+    type DocumentKind, type DocumentListQuery, type DocumentSort,
 } from '../components/documents/documentLists';
 import type { CsvColumn } from '../lib/csv';
 import type { DocumentListOptions, DocumentListPage, InvoiceListRow, QuoteListRow } from '../types/database';
@@ -108,23 +109,44 @@ function zohoUrl(kind: DocumentKind, r: DocRow): string {
     return `https://books.zoho.com/app/${org}#/${path}/${r.id}`;
 }
 
+/** Dates and amounts read newest or largest first; names and statuses A to Z. */
+const STARTS_DESCENDING: ReadonlySet<DocumentSort> = new Set(['date', 'amount']);
+
 /** The RPC caps a page at this many rows; the export reads in slices of it. */
 const EXPORT_PAGE = 1000;
 const EXPORT_MAX = 100_000;
 
 const NO_REPS: string[] = [];
+const ALL = 'Toutes';
+const DEPT_OPTIONS = DEPARTMENTS.map(d => ({ value: d, label: d }));
+const MONTH_OPTIONS = [
+    { value: ALL, label: 'Année complète' },
+    ...MONTHS.map(m => ({ value: String(m.value), label: m.label })),
+];
+const OFFICE_OPTIONS = [
+    { value: 'Tous', label: 'Tous les bureaux' },
+    ...OFFICES.map(o => ({ value: o.value, label: o.label })),
+];
+const SHIPPING_OPTIONS = [
+    { value: '', label: 'Toutes les factures' },
+    { value: '1', label: 'Avec livraison' },
+];
 
 export default function DocumentList({ kind }: { kind: DocumentKind }) {
     const copy = COPY[kind];
-    const [yearParam, _setYear] = useUrlState('year', 'Toutes');
+    const currentYear = new Date().getFullYear();
+    const [yearParam, _setYear] = useUrlState('year', String(currentYear));
+    const [monthParam, _setMonth] = useUrlState('month', ALL);
     const [selectedStatuses, _setStatuses] = useUrlList('statut');
     const [selectedReps, _setReps] = useUrlList('rep');
+    const [selectedDepts, _setDepts] = useUrlList('dept');
+    const [officeParam, _setOffice] = useUrlState('bureau', 'Tous');
+    const [shippingParam, _setShipping] = useUrlState('livraison', '');
+    const [q, setQ] = useUrlState('q', '');
     const [sortParam, _setSort] = useUrlState('tri', 'date');
     const [orderParam] = useUrlState('ordre', 'desc');
     const [page, setPage] = useUrlStateNumber('page', 1);
 
-    const [search, setSearch] = useState('');
-    const [debouncedSearch, setDebouncedSearch] = useState('');
     const [options, setOptions] = useState<DocumentListOptions | null>(null);
     const [result, setResult] = useState<DocumentListPage<InvoiceListRow | QuoteListRow> | null>(null);
     const [loading, setLoading] = useState(true);
@@ -135,48 +157,69 @@ export default function DocumentList({ kind }: { kind: DocumentKind }) {
     // rebuilt on every render.
     const repFilter = useRepFilter(selectedReps, options?.reps ?? NO_REPS);
 
-    const year = yearParam === 'Toutes' ? null : (Number(yearParam) || null);
-    const sort: 'date' | 'amount' = sortParam === 'montant' ? 'amount' : 'date';
+    const year = yearParam === ALL ? null : (Number(yearParam) || currentYear);
+    const monthNumber = Number(monthParam);
+    const month = year !== null && monthNumber >= 1 && monthNumber <= 12 ? monthNumber : null;
+    const office = OFFICES.some(o => o.value === officeParam) ? officeParam : null;
+    const withShipping = kind === 'factures' && shippingParam === '1';
+    const sort = sortFromParam(sortParam);
     const desc = orderParam !== 'asc';
     // Known values only, in option order: one selection, one cache key.
     const statuses = useMemo(
         () => copy.statusOptions.map(o => o.value).filter(v => selectedStatuses.includes(v)),
         [copy, selectedStatuses],
     );
+    const depts = useMemo(
+        () => DEPARTMENTS.filter(d => selectedDepts.includes(d)),
+        [selectedDepts],
+    );
 
     // A filter and the page reset move in ONE navigation; see UrlStateCompanions.
     const toPage1 = { page: null };
-    const setYear = (v: string) => _setYear(v, toPage1);
+    const setYear = (v: string) => _setYear(v, { ...toPage1, ...(v === ALL ? { month: null } : {}) });
+    const setMonth = (v: string) => _setMonth(v, toPage1);
     const setStatuses = (v: string[]) => _setStatuses(v, toPage1);
     const setReps = (v: string[]) => _setReps(v, toPage1);
-    /** A second click on the sorted column flips it; a new column starts descending. */
-    const sortBy = (key: 'date' | 'amount') => {
-        const nextDesc = key === sort ? !desc : true;
-        _setSort(key === 'amount' ? 'montant' : 'date', { ordre: nextDesc ? null : 'asc', page: null });
+    const setDepts = (v: string[]) => _setDepts(v, toPage1);
+    const setOffice = (v: string) => _setOffice(v, toPage1);
+    const setShipping = (v: string) => _setShipping(v, toPage1);
+    /** A second click on the sorted column flips it; a new column starts in its natural direction. */
+    const sortBy = (key: DocumentSort) => {
+        const nextDesc = key === sort ? !desc : STARTS_DESCENDING.has(key);
+        _setSort(SORT_PARAM[key], { ordre: nextDesc ? null : 'asc', page: null });
     };
 
-    // Debounced, with the page reset skipped on the first run so a shared
-    // ?page=3 survives the mount.
-    const searchSettled = useRef(false);
+    // The box is local text; the URL (and the query) follow it 300 ms after the
+    // last key, with the page reset in the same navigation. Back, Forward or
+    // "Réinitialiser" change the URL instead, and the box follows.
+    const [search, setSearch] = useState(q);
+    const [syncedQ, setSyncedQ] = useState(q);
+    if (q !== syncedQ) {
+        setSyncedQ(q);
+        setSearch(q);
+    }
+    const qRef = useRef(q);
+    const setQRef = useRef(setQ);
+    useEffect(() => { qRef.current = q; setQRef.current = setQ; });
     useEffect(() => {
         const t = setTimeout(() => {
-            setDebouncedSearch(search);
-            if (searchSettled.current) setPage(1);
-            searchSettled.current = true;
+            if (search !== qRef.current) setQRef.current(search, { page: null });
         }, 300);
         return () => clearTimeout(t);
-        // setPage is stable; search is the only real trigger.
-        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [search]);
 
     const query = useMemo<DocumentListQuery>(() => ({
-        search: debouncedSearch,
+        search: q,
         statuses,
         reps: repFilter.rep ? [repFilter.rep] : repFilter.reps,
         year,
+        month,
+        depts,
+        office,
+        withShipping,
         sort,
         desc,
-    }), [debouncedSearch, statuses, repFilter.rep, repFilter.reps, year, sort, desc]);
+    }), [q, statuses, repFilter.rep, repFilter.reps, year, month, depts, office, withShipping, sort, desc]);
 
     // Responses do not come back in the order they were sent; only the latest
     // request may write the table.
@@ -186,7 +229,7 @@ export default function DocumentList({ kind }: { kind: DocumentKind }) {
         setLoading(true);
         const { data, error } = await cachedRpc<DocumentListPage<InvoiceListRow | QuoteListRow>>(
             DOCUMENT_LIST_RPC[kind],
-            documentListArgs(query, DOCUMENT_PAGE_SIZE, (page - 1) * DOCUMENT_PAGE_SIZE),
+            documentListArgs(kind, query, DOCUMENT_PAGE_SIZE, (page - 1) * DOCUMENT_PAGE_SIZE),
         );
         if (id !== requestId.current) return;
         setLoading(false);
@@ -230,7 +273,7 @@ export default function DocumentList({ kind }: { kind: DocumentKind }) {
     const exportRows = useCallback(async (): Promise<DocRow[]> => {
         const out: DocRow[] = [];
         for (let offset = 0; offset < EXPORT_MAX; offset += EXPORT_PAGE) {
-            const { data, error } = await supabase.rpc(DOCUMENT_LIST_RPC[kind], documentListArgs(query, EXPORT_PAGE, offset));
+            const { data, error } = await supabase.rpc(DOCUMENT_LIST_RPC[kind], documentListArgs(kind, query, EXPORT_PAGE, offset));
             // A plain object from postgrest-js, not an Error: wrapped for the message.
             if (error) throw new Error(error.message);
             const pageRows = toRows(kind, (data as DocumentListPage<InvoiceListRow | QuoteListRow>).rows);
@@ -241,35 +284,41 @@ export default function DocumentList({ kind }: { kind: DocumentKind }) {
         return out.map(r => ({ ...r, rep: r.rep ? repTeam.display(r.rep) : null }));
     }, [kind, query, repTeam]);
 
+    // The weekly detail list's export headers, so both files read the same.
     const csvColumns = useMemo<CsvColumn<DocRow>[]>(() => [
         { header: 'Date',         value: r => r.date },
-        { header: 'Numéro',       value: r => r.number },
+        { header: 'Numero',       value: r => r.number },
         { header: 'Client',       value: r => r.client },
-        { header: 'Représentant', value: r => r.rep },
-        { header: 'Département',  value: r => r.department ?? r.deptLabel },
+        { header: 'Representant', value: r => r.rep },
+        { header: 'Departement',  value: r => r.department ?? r.deptLabel },
         { header: 'Bureau',       value: r => r.office },
         { header: 'Statut',       value: r => statusLabel(kind, r) },
         { header: 'Montant',      value: r => r.amount },
         ...(kind === 'factures' ? [{ header: 'Dont livraison', value: (r: DocRow) => r.shipping }] : []),
     ], [kind]);
 
-    const yearOptions = useMemo(() => [
-        { value: 'Toutes', label: 'Toutes les années' },
-        ...(options?.years ?? []).map(y => ({ value: String(y), label: String(y) })),
-    ], [options]);
+    // The current year is offered even before the options answer, since it is
+    // the one selected by default.
+    const yearOptions = useMemo(() => {
+        const years = [...new Set([currentYear, ...(options?.years ?? [])])].sort((a, b) => b - a);
+        return [{ value: ALL, label: 'Toutes les années' }, ...years.map(y => ({ value: String(y), label: String(y) }))];
+    }, [options, currentYear]);
 
-    // Counted from `search`, not the debounced value, so the badge reacts as you type.
+    // Counted from `search`, not the URL, so the badge reacts as you type.
     const activeFilterCount = [
-        search.trim() !== '', year !== null, statuses.length > 0, !repFilter.isAll,
+        search.trim() !== '', year !== currentYear, month !== null, statuses.length > 0,
+        !repFilter.isAll, depts.length > 0, office !== null, withShipping,
     ].filter(Boolean).length;
     const clearFilters = () => {
         setSearch('');
-        _setYear('Toutes', { statut: null, rep: null, page: null });
+        _setYear(String(currentYear), {
+            month: null, statut: null, rep: null, dept: null, bureau: null, livraison: null, q: null, page: null,
+        });
     };
 
     const refresh = () => { invalidateRpcCache(); fetchRef.current(); };
 
-    const thSort = (key: 'date' | 'amount', label: string, align: 'left' | 'right') => (
+    const thSort = (key: DocumentSort, label: string, align: 'left' | 'right' = 'left') => (
         <th
             className={cn(
                 "px-3 2xl:px-5 py-2.5 md:py-3 text-2xs font-semibold text-ink-mute uppercase tracking-eyebrow whitespace-nowrap cursor-pointer hover:bg-stone transition-colors group",
@@ -315,6 +364,14 @@ export default function DocumentList({ kind }: { kind: DocumentKind }) {
                         />
                     </div>
                 </FilterGroup>
+                <FilterGroup label="Année">
+                    <Select value={year === null ? ALL : String(year)} onChange={setYear}
+                            options={yearOptions} variant="accent" className="w-40" />
+                </FilterGroup>
+                <FilterGroup label="Mois">
+                    <Select value={month === null ? ALL : String(month)} onChange={setMonth}
+                            options={MONTH_OPTIONS} disabled={year === null} className="w-40" />
+                </FilterGroup>
                 <FilterGroup label="Statut">
                     <MultiSelect values={statuses} onChange={setStatuses} options={[...copy.statusOptions]}
                                  allLabel="Tous les statuts" className="w-44" />
@@ -323,10 +380,19 @@ export default function DocumentList({ kind }: { kind: DocumentKind }) {
                     <MultiSelect values={repFilter.selected} onChange={setReps} options={repFilter.options}
                                  allLabel={REP_ALL_LABEL} allIcon={repFilter.allIcon} className="w-52" />
                 </FilterGroup>
-                <FilterGroup label="Année">
-                    <Select value={year === null ? 'Toutes' : String(year)} onChange={setYear}
-                            options={yearOptions} className="w-40" />
+                <FilterGroup label="Département">
+                    <MultiSelect values={depts} onChange={setDepts} options={DEPT_OPTIONS}
+                                 allLabel="Tous les départements" className="w-52" />
                 </FilterGroup>
+                <FilterGroup label="Bureau">
+                    <Select value={office ?? 'Tous'} onChange={setOffice} options={OFFICE_OPTIONS} className="w-40" />
+                </FilterGroup>
+                {kind === 'factures' && (
+                    <FilterGroup label="Livraison">
+                        <Select value={withShipping ? '1' : ''} onChange={setShipping}
+                                options={SHIPPING_OPTIONS} className="w-44" />
+                    </FilterGroup>
+                )}
                 <ClearFiltersButton activeCount={activeFilterCount} onClear={clearFilters} />
             </FilterBar>
 
@@ -369,13 +435,13 @@ export default function DocumentList({ kind }: { kind: DocumentKind }) {
                         <table className="w-full text-sm" translate="no">
                             <thead className="sticky top-0 z-10 bg-white">
                                 <tr className="border-b border-hairline bg-sand/50">
-                                    {thSort('date', 'Date', 'left')}
-                                    <th className={th}>Statut</th>
-                                    <th className={th}>Client</th>
+                                    {thSort('date', 'Date')}
+                                    {thSort('status', 'Statut')}
+                                    {thSort('client', 'Client')}
                                     {thSort('amount', 'Montant', 'right')}
-                                    <th className={th}>{copy.numberHeader}</th>
-                                    <th className={th}>Représentant</th>
-                                    <th className={th}>Département</th>
+                                    {thSort('number', copy.numberHeader)}
+                                    {thSort('rep', 'Représentant')}
+                                    {thSort('department', 'Département')}
                                     <th className={cn(th, 'text-center')}>Action</th>
                                 </tr>
                             </thead>

@@ -919,18 +919,3 @@ export type DocumentListOptions = {
     years: number[];
     reps: string[];
 };
-
-/** One row of the "Tous les devis" list: a quote of any status, straight from `sales`. */
-export type AllQuoteRow = {
-    zoho_id: string;
-    quote_number: string;
-    client_name: string;
-    rep_name: string;
-    department: string;
-    zoho_department_label: string | null;
-    office: 'QC' | 'MTL';
-    status: 'draft' | 'sent' | 'accepted' | 'invoiced' | 'declined' | 'expired' | null;
-    amount: number;
-    quote_date: string | null;
-    sale_date: string | null;
-};

@@ -935,11 +935,9 @@ the table would just be overwritten by the next sync.
 | `/publicite` | `Advertising` | Publicité section. Google Ads + Meta spend against the revenue of the accounts tagged to each, invoiced or won in quotes (two tabs), in three views (payant, organique, Google inconnu). Channel-level and monthly, never per lead |
 | `/` | `Dashboard` | Devis section. YTD KPIs, rep leaderboard, top clients, monthly targets. Without the section, `/` redirects to the first section the user has |
 | `/weekly` | `WeeklyDetail` | Week-by-week sales breakdown (pivot + line items) |
-| `/devis/tous` | `AllQuotes` | Devis section. Every quote in `sales`, any status, searchable by client or number, paginated server-side. Reads the table directly (RLS gates it) |
-| `/factures/tous` | `AllInvoices` | Factures section. Every invoice and credit note, same list, with the shipping line. Reads `invoices` directly |
+| `/devis/tous` | `DocumentList` | Devis section. **Tous les devis**: every quote of every status, dated by issue, this year by default. Search (client, number, rep), year, month, status, rep, department and office filters, a sort on every column, count, total and paging, all in Postgres (`get_quote_list`) |
+| `/factures/tous` | `DocumentList` | Factures section. **Toutes les factures**: every invoice and credit note, same page (`get_invoice_list`), plus an "avec livraison" filter. Neither list applies `excluded_clients`: they are directories, not statistics |
 | `/quarterly` | `QuarterlyAverages` | YoY quarterly average deal size per rep |
-| `/devis/liste` | `DocumentList` | Devis section. **Tous les devis**: every quote of every status, dated by issue. Search (client, number, rep), status, rep and year filters, sort, count, total and paging all in Postgres (`get_quote_list`) |
-| `/factures/liste` | `DocumentList` | Factures section. **Toutes les factures**: every invoice and credit note, same page (`get_invoice_list`). Neither list applies `excluded_clients`: they are directories, not statistics |
 | `/taches` | `TasksDashboard` | Admin-only. CRM task completion per rep, by week |
 | `/settings` | `Settings` | Admin-only. Users and their sections, monthly objectives, fiscal quarters, syncs, webhook logs |
 

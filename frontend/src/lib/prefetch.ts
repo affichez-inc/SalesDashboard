@@ -23,8 +23,8 @@
 import { prefetchRpc } from './rpcCache';
 import { AD_VIEW_PARAM, DEFAULT_AD_VIEW } from '../components/advertising/channel';
 import {
-    DEFAULT_DOCUMENT_QUERY, DOCUMENT_LIST_RPC, DOCUMENT_OPTIONS_KIND, DOCUMENT_PAGE_SIZE,
-    documentListArgs, type DocumentKind,
+    DOCUMENT_LIST_RPC, DOCUMENT_OPTIONS_KIND, DOCUMENT_PAGE_SIZE,
+    defaultDocumentQuery, documentListArgs, type DocumentKind,
 } from '../components/documents/documentLists';
 
 /** Routes whose chunk is worth fetching on hover, by path. */
@@ -36,10 +36,8 @@ const ROUTE_CHUNKS: Record<string, () => Promise<unknown>> = {
     '/factures': () => import('../pages/FDashboard'),
     '/factures/weekly': () => import('../pages/FWeeklyDetail'),
     '/factures/quarterly': () => import('../pages/FQuarterlyAverages'),
-    '/factures/liste': () => import('../pages/DocumentList'),
-    '/devis/liste': () => import('../pages/DocumentList'),
-    '/factures/tous': () => import('../pages/AllInvoices'),
-    '/devis/tous': () => import('../pages/AllQuotes'),
+    '/factures/tous': () => import('../pages/DocumentList'),
+    '/devis/tous': () => import('../pages/DocumentList'),
     '/comptes': () => import('../pages/AccountsDashboard'),
     '/comptes/detail': () => import('../pages/AccountsDetail'),
     '/publicite': () => import('../pages/Advertising'),
@@ -86,14 +84,15 @@ const ROUTE_QUERIES: Record<string, () => void> = {
     '/portail/leads': () => prefetchRpc('get_zoho_lead_filter_options', {
         p_year: CURRENT_YEAR, p_stage: 'lead',
     }, { single: true }),
-    // The unfiltered first page is the same for everybody, so it is knowable too.
-    '/factures/liste': () => prefetchDocumentList('factures'),
-    '/devis/liste': () => prefetchDocumentList('devis'),
+    // The first page as it opens (this year, newest first) is the same for
+    // everybody, so it is knowable too.
+    '/factures/tous': () => prefetchDocumentList('factures'),
+    '/devis/tous': () => prefetchDocumentList('devis'),
 };
 
 function prefetchDocumentList(kind: DocumentKind): void {
     prefetchRpc('get_document_list_options', { p_kind: DOCUMENT_OPTIONS_KIND[kind] });
-    prefetchRpc(DOCUMENT_LIST_RPC[kind], documentListArgs(DEFAULT_DOCUMENT_QUERY, DOCUMENT_PAGE_SIZE, 0));
+    prefetchRpc(DOCUMENT_LIST_RPC[kind], documentListArgs(kind, defaultDocumentQuery(), DOCUMENT_PAGE_SIZE, 0));
 }
 
 const started = new Set<string>();

@@ -9,6 +9,7 @@ import Layout from './components/Layout';
 import Login from './pages/Login';
 import AccessDenied from './pages/AccessDenied';
 import { homePathFor } from './lib/sections';
+import { CONSENT_PATH, pendingConsentUrl } from './lib/oauthConsent';
 
 // Leads module - hidden from the UI while the Comptes module replaces it.
 // The pages and every get_zoho_lead* RPC behind them are left intact: the
@@ -52,6 +53,7 @@ const Createurs = lazy(() => import('./pages/Createurs'));
 const PortailLeads = lazy(() => import('./pages/PortailLeads'));
 const TasksDashboard = lazy(() => import('./pages/TasksDashboard'));
 const DocumentList = lazy(() => import('./pages/DocumentList'));
+const OAuthConsent = lazy(() => import('./pages/OAuthConsent'));
 
 /**
  * Which routes exist depends on who is signed in.
@@ -63,6 +65,7 @@ const DocumentList = lazy(() => import('./pages/DocumentList'));
  */
 function AppRoutes() {
     const { user, loading, access, sections, isAdmin } = useAuth();
+    const { pathname } = useLocation();
 
     if (loading) {
         return (
@@ -79,6 +82,15 @@ function AppRoutes() {
     // Signed in to Zoho is not enough: the address has to be in the user list.
     if (access === 'error') return <AccessDenied reason="error" />;
     if (access === 'denied') return <AccessDenied reason="denied" />;
+
+    // The Claude connector's consent step (lib/oauthConsent.ts): its own
+    // page, outside the sections, and where the Zoho sign-in comes back to
+    // when it was started from there.
+    if (pathname === CONSENT_PATH) {
+        return <Suspense fallback={<RouteFallback />}><OAuthConsent /></Suspense>;
+    }
+    const pendingConsent = pendingConsentUrl();
+    if (pendingConsent) return <Navigate to={pendingConsent} replace />;
 
     const home = homePathFor(sections);
     if (home === null && !isAdmin) return <AccessDenied reason="empty" />;

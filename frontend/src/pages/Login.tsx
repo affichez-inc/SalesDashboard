@@ -3,6 +3,7 @@ import { useSearchParams } from 'react-router-dom';
 import { Loader2 } from 'lucide-react';
 import { Logo } from '../components/Logo';
 import { Accented } from '../components/Accented';
+import { rememberConsentRequest } from '../lib/oauthConsent';
 
 const ZOHO_CLIENT_ID = import.meta.env.VITE_ZOHO_CLIENT_ID as string;
 const SUPABASE_URL   = import.meta.env.VITE_SUPABASE_URL as string;
@@ -28,6 +29,8 @@ export default function Login() {
 
     const handleZohoLogin = () => {
         setLoading(true);
+        // zoho-auth returns to "/", whatever page the sign-in started from.
+        rememberConsentRequest();
         const params = new URLSearchParams({
             client_id:     ZOHO_CLIENT_ID,
             response_type: 'code',

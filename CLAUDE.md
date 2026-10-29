@@ -852,6 +852,55 @@ full price.
   (`account_ai_summary_expired`, `temperature_expired` in the run's detection). The mirror holds no
   invoice due dates: unpaid ones are assumed net 30.
 
+### The Claude connector (MCP): read-only SQL from Claude
+
+`supabase/functions/mcp` is a remote MCP server, added to Claude as a custom connector with the URL
+`https://auyfucbskylougsmmrks.supabase.co/functions/v1/mcp` (migrations
+`20261030120000_claude_connector.sql`, the flag and the login, and
+`20261030140000_claude_connector_token_lock.sql`, the token rules below). It offers two tools, `describe_database` (the guide in
+`guide.ts`, then the live tables, enums and `get_*` functions) and `query` (one read-only SELECT).
+
+- **Who.** Only a user whose `allowed_users.can_use_claude` is true, off for everyone by default and
+  set by an UPDATE (no screen), **and whose `auth.users` row has no password**
+  (`encrypted_password` empty). The function asks `mcp_claude_access(sub)` on every request; the
+  consent page refuses the flagless before a token exists. The password rule exists because the
+  consent endpoint accepts any session and the token's `amr` is always
+  `oauth_provider/authorization_code`: without it, a password session could be turned into a
+  connector token. Every listed account had a password on 2026-10-30 (origin unknown; the Zoho
+  sign-in never uses it), so turning someone on is two UPDATEs: the flag, and
+  `auth.users SET encrypted_password = ''`.
+- **A connector token opens nothing in the app.** OAuth tokens are ordinary user tokens plus a
+  `client_id` claim, so `app_session_trusted()` refuses any token that carries one; without that the
+  token Claude stores would be a read-write PostgREST session for its user.
+- **Sign-in is Supabase Auth's OAuth 2.1 server** (dashboard: Authentication → OAuth Server, path
+  `/oauth/consent`, dynamic registration off; one OAuth app "Claude", public, redirect
+  `https://claude.ai/api/mcp/auth_callback`, its id in the `MCP_OAUTH_CLIENT_ID` secret). The 401
+  points Claude at `<function>/.well-known/oauth-protected-resource`, which names
+  `/auth/v1` as the authorization server; Auth sends the user to `OAuthConsent.tsx`, which signs
+  them in with Zoho first if needed (`lib/oauthConsent.ts` keeps the request across that round trip,
+  because `zoho-auth` always lands on "/"). The function accepts a token only if its `client_id` is
+  that app, so an app session token is refused. `verify_jwt` is off: the gateway's 401 has no
+  `WWW-Authenticate`.
+- **The database login is `mcp_reader`, not `authenticated`.** `authenticated` can also read
+  `net.http_request_queue` (pg_net request headers, keys included), and SQL sent through PostgREST
+  runs under `authenticator`, which may SET ROLE `service_role`. `mcp_reader` is a member of nothing,
+  has BYPASSRLS, SELECT on every relation of `public` except `zoho_oauth_token`, EXECUTE on the
+  functions `authenticated` may run, and default privileges for new tables and functions. **A new
+  table that holds a credential needs `REVOKE ALL ... FROM mcp_reader`.** Its password exists only in
+  the `MCP_DB_URL` secret (Supavisor, transaction mode, user `mcp_reader.<ref>`).
+- **Read-only four times over**: no write privilege; `BEGIN READ ONLY`; `{ simple: false }` on
+  `unsafe()` so the extended protocol takes one statement (postgres.js uses the simple protocol, which
+  runs several, for a query without parameters); and the text sits inside
+  `SELECT * FROM (...) LIMIT n`, so SET, COMMIT, DO or a writing CTE are syntax errors. Remove none
+  of them. The query runs in a savepoint and `pg_advisory_unlock_all()` follows it, failed or not: a
+  session advisory lock would otherwise outlive the request on the pooled connection and stall
+  `account_ai_summary_claim()`.
+- **Results are text as Postgres prints it** (`.raw()`), in `America/Toronto`, at most `max_rows`
+  (default 200, max 2000) and about 100,000 characters; past that Claude is told to aggregate.
+  Each call is logged (email, ms, rows, first 500 characters of the SQL) in the function's logs.
+- **`guide.ts` is what Claude believes about the data.** When a sync or an RPC changes what a table
+  holds, change the guide in the same release.
+
 ### Leads: which table is which
 
 There are two lead tables, and picking the wrong one is the easiest mistake to
@@ -946,6 +995,7 @@ the table would just be overwritten by the next sync.
 | `/quarterly` | `QuarterlyAverages` | YoY quarterly average deal size per rep |
 | `/taches` | `TasksDashboard` | Admin-only. CRM task completion per rep, by week |
 | `/settings` | `Settings` | Admin-only. Users and their sections, monthly objectives, fiscal quarters, syncs, webhook logs |
+| `/oauth/consent` | `OAuthConsent` | Outside the sections and the sidebar. The Claude connector's consent step (see **The Claude connector**); offered only to users with `can_use_claude` |
 
 All routes are children of `Layout`, which provides the sidebar navigation. Which
 routes exist depends on the signed-in user's sections (see **Access**).

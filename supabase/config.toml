@@ -424,6 +424,12 @@ verify_jwt = false
 [functions.account-summary]
 verify_jwt = false
 
+# The Claude connector (MCP). Its 401 must carry a WWW-Authenticate header
+# pointing at the sign-in, which the gateway's own 401 does not; the function
+# verifies the OAuth token itself.
+[functions.mcp]
+verify_jwt = false
+
 [analytics]
 enabled = true
 port = 54327

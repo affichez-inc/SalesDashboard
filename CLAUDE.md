@@ -762,8 +762,8 @@ those two channels. Setup and credentials: **`docs/ADVERTISING.md`**.
   build shows what it always showed; `p_view` wins. Drop the parameter in a later migration.
 - **Attribution is by channel and month of account creation, never per lead or per campaign** —
   the CRM stores no click identifiers. The campaign table therefore has no revenue column.
-- **Two screens in the nav, one page: Factures (`/publicite`, the section's home) and Devis
-  (`/publicite/devis`).** Publicité is a module like Comptes; moving between its two screens keeps
+- **Two screens in the nav, one page: Devis (`/publicite/devis`, the section's home) and Factures
+  (`/publicite`).** Publicité is a module like Comptes; moving between its two screens keeps
   the query string, so the filters follow (`keepSearchUnder` in `Layout.tsx`). `p_basis => 'quotes'` on
   `get_ad_performance` and `get_ad_monthly` (`20261027120000_ad_quotes_basis.sql`) sums the
   accounts' **won** quotes (`status` accepted or invoiced, dated by `sale_date`, the Devis rule)
@@ -1002,8 +1002,8 @@ the table would just be overwritten by the next sync.
 | `/comptes` | `AccountsDashboard` | Comptes section. Account cohorts by source/rep/service/domaine, monthly evolution vs last year, revenue attribution window |
 | `/createurs` | `Createurs` | **Documents créés** in the nav. Admin-only. Who *created* each quote/invoice, vs who sold it — a rep who builds a quote and hands it to another still gets the credit here. Never reconciles with rep figures, by design |
 | `/comptes/detail` | `AccountsDetail` | Comptes section. Searchable client directory; a row opens its billing history by department and year |
-| `/publicite` | `Advertising` | Publicité section, **Factures** screen (the section's home). Google Ads + Meta spend against the invoices of the accounts tagged to each, in three views (payant, organique, Google inconnu). Channel-level and monthly, never per lead |
-| `/publicite/devis` | `Advertising` | Publicité section, **Devis** screen: the same page over the accounts' won quotes |
+| `/publicite` | `Advertising` | Publicité section, **Factures** screen. Google Ads + Meta spend against the invoices of the accounts tagged to each, in three views (payant, organique, Google inconnu). Channel-level and monthly, never per lead |
+| `/publicite/devis` | `Advertising` | Publicité section, **Devis** screen (the section's home): the same page over the accounts' won quotes |
 | `/` | `Dashboard` | Devis section. YTD KPIs, rep leaderboard, top clients, monthly targets. Without the section, `/` redirects to the first section the user has |
 | `/weekly` | `WeeklyDetail` | Week-by-week sales breakdown (pivot + line items) |
 | `/devis/tous` | `DocumentList` | Devis section. **Tous les devis**: every quote of every status, dated by issue, this year by default. Search (client, number, rep), year, month, status, rep, department and office filters, a sort on every column, count, total and paging, all in Postgres (`get_quote_list`) |

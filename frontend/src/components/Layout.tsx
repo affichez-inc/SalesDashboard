@@ -378,8 +378,8 @@ export default function Layout() {
                 ...(sections.publicite ? [{
                     key: 'publicite', name: 'Publicité', icon: AdvertisingIcon,
                     items: [
-                        { name: 'Factures', href: '/publicite',       icon: Receipt,       end: true, keepSearchUnder: '/publicite' },
                         { name: 'Devis',    href: '/publicite/devis', icon: FileSignature, keepSearchUnder: '/publicite' },
+                        { name: 'Factures', href: '/publicite',       icon: Receipt,       end: true, keepSearchUnder: '/publicite' },
                     ],
                 }] : []),
                 // Leads - hidden while the Comptes module replaces it. Routes are

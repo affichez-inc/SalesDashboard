@@ -53,8 +53,8 @@ export function viewHasSpend(view: AdView): boolean {
  * credit notes, or its won quotes (accepted or invoiced, dated by acceptance,
  * the rule of the Devis screens). Accounts, spend and the window are the same
  * on both; only the documents summed change (p_basis in get_ad_performance and
- * get_ad_monthly). Each is a screen of its own in the nav: Factures at
- * /publicite, the section's home, and Devis at /publicite/devis.
+ * get_ad_monthly). Each is a screen of its own in the nav: Devis at
+ * /publicite/devis, the section's home, and Factures at /publicite.
  */
 export type AdBasis = 'factures' | 'devis';
 

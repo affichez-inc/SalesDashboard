@@ -152,7 +152,7 @@ function AppRoutes() {
                 )}
 
                 {/* ─── Publicité - one page, two screens: the accounts'
-                    invoices (the section's home) or their won quotes.
+                    invoices or their won quotes (the section's home).
                     ad_spend_daily is restricted by RLS to the same people. ─── */}
                 {sections.publicite && (
                     <>

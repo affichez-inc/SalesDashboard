@@ -14,7 +14,7 @@ export const SECTIONS = [
     { key: 'devis',     column: 'can_access_devis',     label: 'Devis',       home: '/',          byDefault: true },
     { key: 'factures',  column: 'can_access_factures',  label: 'Factures',    home: '/factures',  byDefault: false },
     { key: 'comptes',   column: 'can_access_comptes',   label: 'Comptes',     home: '/comptes',   byDefault: false },
-    { key: 'publicite', column: 'can_access_publicite', label: 'Publicité',   home: '/publicite', byDefault: false },
+    { key: 'publicite', column: 'can_access_publicite', label: 'Publicité',   home: '/publicite/devis', byDefault: false },
     { key: 'portail',   column: 'can_access_portail',   label: 'Mon Portail', home: '/portail',   byDefault: true },
 ] as const;
 

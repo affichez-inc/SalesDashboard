@@ -2,12 +2,17 @@ import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import { useUrlState, useUrlList } from '../hooks/useUrlState';
 import { supabase } from '../lib/supabase';
 import { cachedRpc, invalidateRpcCache } from '../lib/rpcCache';
-import { Loader2, Building2, Percent, DollarSign, Timer } from 'lucide-react';
+import { Loader2, Building2, Percent, DollarSign, Timer, Search } from 'lucide-react';
 import type {
     ZohoAccountKPIs, ZohoAccountBreakdownRow, ZohoAccountFilterOptions,
-    ZohoAccountMonthlyRow,
+    ZohoAccountMonthlyRow, AccountSpendMax,
 } from '../types/database';
 import { MonthlyEvolution } from '../components/accounts/MonthlyEvolution';
+import { AmountRangeFilter } from '../components/accounts/AmountRangeFilter';
+import {
+    DEFAULT_SPEND_PERIOD, isSpendFilterActive, spendPeriod, spendRangeArgs,
+    type SpendPeriodKey, type SpendRange,
+} from '../components/accounts/spendRange';
 import { MONTHS } from '../lib/constants';
 import { FilterBar, FilterGroup } from '../components/FilterBar';
 import { Select } from '../components/Select';
@@ -16,7 +21,7 @@ import { InfoHint } from '../components/InfoHint';
 import { ExportButton } from '../components/ExportButton';
 import { ClearFiltersButton } from '../components/ClearFiltersButton';
 import { useRepFilter, REP_ALL_LABEL } from '../hooks/useRepFilter';
-import { formatCurrencyCAD, cn } from '../lib/utils';
+import { formatCurrencyCAD, phoneSearchPattern, sanitizeSearch, cn } from '../lib/utils';
 import type { CsvColumn } from '../lib/csv';
 import { RepAvatar } from '../components/RepAvatar';
 import { useRepTeam, mergeInternalRows, INTERNAL_LABEL } from '../lib/repTeam';
@@ -83,6 +88,35 @@ export default function AccountsDashboard() {
         () => ratingsInScope(selectedRatings, ratingScope === 'Tous'),
         [selectedRatings, ratingScope],
     );
+    // The filters this page shares with Comptes · Détail, under the same URL
+    // params, so they read the same accounts there and here.
+    const [selectedInvoiced, setSelectedInvoiced] = useUrlState('factures', 'Tous');
+    const [amountMinParam, _setAmountMin] = useUrlState('montant_min', '');
+    const [amountMaxParam] = useUrlState('montant_max', '');
+    const [amountPeriodParam] = useUrlState('montant_periode', DEFAULT_SPEND_PERIOD);
+    const amountRange = useMemo<SpendRange>(() => {
+        const num = (s: string) => (s !== '' && Number.isFinite(Number(s)) ? Number(s) : null);
+        return {
+            min: num(amountMinParam),
+            max: num(amountMaxParam),
+            period: spendPeriod(amountPeriodParam).key as SpendPeriodKey,
+        };
+    }, [amountMinParam, amountMaxParam, amountPeriodParam]);
+    // The three params move in one navigation. A period with no amount is not a
+    // filter, so it is not kept either.
+    const setAmountRange = (r: SpendRange) => {
+        const on = isSpendFilterActive(r);
+        _setAmountMin(on && r.min !== null && r.min > 0 ? String(r.min) : '', {
+            montant_max: on && r.max !== null ? String(r.max) : null,
+            montant_periode: on && r.period !== DEFAULT_SPEND_PERIOD ? r.period : null,
+        });
+    };
+    const [search, setSearch] = useState('');
+    const [debouncedSearch, setDebouncedSearch] = useState('');
+    useEffect(() => {
+        const t = setTimeout(() => setDebouncedSearch(search), 300);
+        return () => clearTimeout(t);
+    }, [search]);
 
     const [loading, setLoading] = useState(true);
     const [kpis, setKpis] = useState<ZohoAccountKPIs | null>(null);
@@ -113,13 +147,16 @@ export default function AccountsDashboard() {
      * months would be the more surprising behaviour.
      */
     const clearFilters = () => {
+        setSearch('');
         _setYearParam('2026', {
             month: null, rep: null, source: null, service: null,
             domaine: null, region: null, fenetre: null, statut: null, evaluation: null,
+            factures: null, montant_min: null, montant_max: null, montant_periode: null,
         });
     };
 
     const activeFilterCount = [
+        search.trim() !== '',
         yearParam !== '2026',
         selectedMonth !== 'Toutes',
         !repFilter.isAll,
@@ -130,7 +167,19 @@ export default function AccountsDashboard() {
         windowParam !== '12',
         ratingScope !== 'Clients',
         ratings.length > 0,
+        selectedInvoiced !== 'Tous',
+        isSpendFilterActive(amountRange),
     ].filter(Boolean).length;
+
+    // Sent only when set, so every call without them is one a database that
+    // predates the parameters still answers.
+    const accountFilterArgs = useMemo(() => {
+        const term = sanitizeSearch(debouncedSearch);
+        return {
+            ...(selectedInvoiced !== 'Tous' ? { p_invoiced: selectedInvoiced === 'avec' } : {}),
+            ...(term ? { p_search: `%${term}%`, p_search_phone: phoneSearchPattern(term) } : {}),
+        };
+    }, [selectedInvoiced, debouncedSearch]);
 
     const fetchData = useCallback(async () => {
         setLoading(true);
@@ -143,6 +192,8 @@ export default function AccountsDashboard() {
             // Sent only when set, so every call without it is one a database
             // that predates the parameter still answers.
             ...(ratings.length > 0 ? { p_ratings: ratings } : {}),
+            ...accountFilterArgs,
+            ...spendRangeArgs(amountRange),
         };
         const rep = repFilter.rep;
         const reps = repFilter.reps;
@@ -162,6 +213,8 @@ export default function AccountsDashboard() {
             p_domaines: domaines, p_regions: shared.p_regions,
             p_window_months: shared.p_window_months, p_exclude_ratings: shared.p_exclude_ratings,
             ...(ratings.length > 0 ? { p_ratings: ratings } : {}),
+            ...accountFilterArgs,
+            ...spendRangeArgs(amountRange),
         };
 
         const [
@@ -197,7 +250,36 @@ export default function AccountsDashboard() {
         setMonthlyPrev((monPrevData as ZohoAccountMonthlyRow[]) ?? []);
         setLoading(false);
     }, [yearParamValue, selectedMonth, repFilter, selectedSources, selectedServices,
-        selectedDomaines, selectedRegions, windowMonths, excludeRatings, ratings]);
+        selectedDomaines, selectedRegions, windowMonths, excludeRatings, ratings,
+        accountFilterArgs, amountRange]);
+
+    /** How many accounts a draft amount range keeps, with every other filter on. */
+    const countForAmount = useCallback(async (draft: SpendRange): Promise<number | null> => {
+        const { data, error } = await cachedRpc<ZohoAccountKPIs[]>('get_zoho_account_kpis', {
+            p_year: yearParamValue,
+            p_month: selectedMonth === 'Toutes' ? null : selectedMonth,
+            p_rep: repFilter.rep, p_reps: repFilter.reps,
+            p_sources: selectedSources.length > 0 ? selectedSources : null,
+            p_services: selectedServices.length > 0 ? selectedServices : null,
+            p_domaines: selectedDomaines.length > 0 ? selectedDomaines : null,
+            p_regions: selectedRegions.length > 0 ? selectedRegions : null,
+            p_window_months: windowMonths,
+            p_exclude_ratings: excludeRatings,
+            ...(ratings.length > 0 ? { p_ratings: ratings } : {}),
+            ...accountFilterArgs,
+            ...spendRangeArgs(draft),
+        });
+        return error ? null : data?.[0]?.accounts_created ?? 0;
+    }, [yearParamValue, selectedMonth, repFilter, selectedSources, selectedServices, selectedDomaines,
+        selectedRegions, windowMonths, excludeRatings, ratings, accountFilterArgs]);
+
+    // The top of the amount slider, per period. Until it loads the amount filter
+    // is not offered, the same as on the detail page.
+    const [spendMax, setSpendMax] = useState<AccountSpendMax | null>(null);
+    useEffect(() => {
+        cachedRpc<AccountSpendMax>('get_account_spend_max', {}, { single: true })
+            .then(({ data }) => { if (data) setSpendMax(data); });
+    }, []);
 
     const fetchOptions = useCallback(async () => {
         const { data } = await cachedRpc<ZohoAccountFilterOptions>('get_zoho_account_filter_options', {
@@ -282,6 +364,20 @@ export default function AccountsDashboard() {
             </div>
 
             <FilterBar>
+                <FilterGroup label="Recherche">
+                    <div className="relative">
+                        <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-ink-mute" />
+                        <input
+                            value={search}
+                            onChange={e => setSearch(e.target.value)}
+                            placeholder="Nom, téléphone, ville…"
+                            aria-label="Rechercher un compte"
+                            className="w-64 h-9 pl-9 pr-3 rounded-md border border-hairline-strong bg-white text-sm
+                                       placeholder:text-ink-faint focus:outline-none focus:ring-2
+                                       focus:ring-ring focus:border-primary"
+                        />
+                    </div>
+                </FilterGroup>
                 <FilterGroup label="Année">
                     <Select
                         value={year === 'Toutes' ? 'Toutes' : String(year)}
@@ -306,7 +402,7 @@ export default function AccountsDashboard() {
                 <FilterGroup label="Source">
                     <MultiSelect values={selectedSources} onChange={setSelectedSources} options={optionList(options?.sources)} allLabel="Toutes les sources" className="w-52" />
                 </FilterGroup>
-                <FilterGroup label="Service">
+                <FilterGroup label="Service facturé">
                     <MultiSelect values={selectedServices} onChange={setSelectedServices} options={optionList(options?.services)} allLabel="Tous les services" className="w-48" />
                 </FilterGroup>
                 <FilterGroup label="Domaine">
@@ -315,6 +411,25 @@ export default function AccountsDashboard() {
                 <FilterGroup label="Région">
                     <MultiSelect values={selectedRegions} onChange={setSelectedRegions} options={optionList(options?.regions)} allLabel="Toutes les régions" className="w-44" />
                 </FilterGroup>
+                <FilterGroup label="Factures">
+                    <Select
+                        value={selectedInvoiced} onChange={setSelectedInvoiced} className="w-44"
+                        options={[
+                            { value: 'Tous',  label: 'Tous les comptes' },
+                            { value: 'avec',  label: 'Avec factures' },
+                            { value: 'sans',  label: 'Sans facture' },
+                        ]}
+                    />
+                </FilterGroup>
+                {spendMax && (
+                    <FilterGroup label="Montant facturé">
+                        <AmountRangeFilter
+                            value={amountRange} onApply={setAmountRange}
+                            maxima={spendMax} previewCount={countForAmount}
+                            className="w-56"
+                        />
+                    </FilterGroup>
+                )}
                 <FilterGroup label="Statut">
                     <Select
                         value={ratingScope} onChange={setRatingScope} className="w-52"

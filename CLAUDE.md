@@ -621,6 +621,18 @@ Three things about the Comptes module that are not obvious:
   The detail table filters `zoho_accounts_enriched.is_internal` instead, because
   PostgREST's `rating=not.in.(…)` is NULL — not TRUE — for the 977 unrated rows
   and would silently hide them.
+- **The Service filter reads what was billed, never the CRM field**
+  (`20261102120000_comptes_billed_service_and_detail_filters.sql`). On both Comptes screens the
+  list is the invoice departments and an account matches when it holds a real invoice (not a
+  credit note) in one of them: `p_services` on the Comptes RPCs, `invoice_departments` on the view.
+  An account never billed matches no service, nor does one billed only before departments existed.
+  The "Par service" breakdown, the Service column and Publicité's own filter still read the CRM
+  field (`service_interest`), which is why `zoho_accounts_scoped` keeps `p_services` for it and
+  takes the billed list as `p_billed_services`.
+- **The dashboard takes the detail page's filters**: Recherche, Factures and Montant facturé, under
+  the same URL params, and they keep the same accounts. The amounts are the view's own columns, so
+  the RPCs read `zoho_accounts_enriched` rather than a second copy of its date arithmetic. The
+  search box stays out of the URL on both.
 - **Rating is shown in French and filtered on the stored value.** The
   "Évaluation" filter (`?evaluation=`, `p_ratings` on the Comptes RPCs, `rating=in.(…)`
   on the view) ANDs with Statut, which stays a plain switch. `zoho_accounts.rating`
@@ -861,14 +873,18 @@ full price.
 `guide.ts`, then the live tables, enums and `get_*` functions) and `query` (one read-only SELECT).
 
 - **Who.** Only a user whose `allowed_users.can_use_claude` is true, off for everyone by default and
-  set by an UPDATE (no screen), **and whose `auth.users` row has no password**
-  (`encrypted_password` empty). The function asks `mcp_claude_access(sub)` on every request; the
-  consent page refuses the flagless before a token exists. The password rule exists because the
-  consent endpoint accepts any session and the token's `amr` is always
-  `oauth_provider/authorization_code`: without it, a password session could be turned into a
-  connector token. Every listed account had a password on 2026-10-30 (origin unknown; the Zoho
-  sign-in never uses it), so turning someone on is two UPDATEs: the flag, and
-  `auth.users SET encrypted_password = ''`.
+  ticked in Paramètres → Utilisateurs (admins too: it is not a section, and an admin does not get
+  it by role), **and whose `auth.users` row has no password** (`encrypted_password` empty). The
+  function asks `mcp_claude_access(sub)` on every request; the consent page refuses the flagless
+  before a token exists. The password rule exists because the consent endpoint accepts any session
+  and the token's `amr` is always `oauth_provider/authorization_code`: without it, a password
+  session could be turned into a connector token.
+- **The tick clears the password.** `generateLink` gives every new account a random password
+  (`adminGenerateLink` in Supabase Auth), which is why they all have one. `sync_allowed_users_to_auth`
+  clears it on every write to a row with the flag on (`20261102140000_claude_access_from_admin_panel.sql`).
+  Someone ticked before their first sign-in has no auth user yet, so `zoho-auth` saves the flag again
+  right after `generateLink`, which runs the trigger. Unticking leaves the account without a
+  password; nothing needs it.
 - **A connector token opens nothing in the app.** OAuth tokens are ordinary user tokens plus a
   `client_id` claim, so `app_session_trusted()` refuses any token that carries one; without that the
   token Claude stores would be a read-write PostgREST session for its user.

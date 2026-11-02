@@ -507,6 +507,8 @@ export type ZohoAccountRow = {
      */
     service_resolved: string[];
     service_origin: 'crm' | 'invoice' | 'none';
+    /** The departments of its real invoices (no credit notes); what the Service filter reads. */
+    invoice_departments: string[] | null;
 
     /**
      * Net amount billed over a period, on Montreal's calendar. What the

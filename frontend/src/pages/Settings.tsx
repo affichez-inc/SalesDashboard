@@ -24,9 +24,9 @@ type Tab = 'objectives' | 'quarters' | 'sync' | 'logs' | 'users' | 'excluded';
 interface Objective { id: string; year: number; month: number; department: string; target_amount: number; }
 interface Quarter { id: string; year: number; quarter: number; start_date: string; end_date: string; num_weeks: number; }
 interface WebhookLog { id: string; received_at: string; action: string; status_code: number; zoho_id: string | null; error_message: string | null; }
-interface AllowedUser extends SectionFlags { email: string; name: string | null; role: string; rep_name: string | null; }
+interface AllowedUser extends SectionFlags { email: string; name: string | null; role: string; rep_name: string | null; can_use_claude: boolean; }
 
-const EMPTY_USER: AllowedUser = { email: '', name: '', role: 'member', rep_name: '', ...DEFAULT_FLAGS };
+const EMPTY_USER: AllowedUser = { email: '', name: '', role: 'member', rep_name: '', can_use_claude: false, ...DEFAULT_FLAGS };
 
 /** The section flags of a row, with the column default wherever one is missing. */
 function flagsOf(row: Partial<SectionFlags>): SectionFlags {
@@ -663,6 +663,7 @@ function UsersManager({ setMessage }: { setMessage: (m: { type: 'success' | 'err
             name: form.name?.trim() || null,
             role: form.role,
             ...flagsOf(form),
+            can_use_claude: form.can_use_claude === true,
             rep_name: form.rep_name?.trim() || null,
         };
         const { error } = await supabase.from('allowed_users').upsert(payload, { onConflict: 'email' });
@@ -855,6 +856,24 @@ function UsersManager({ setMessage }: { setMessage: (m: { type: 'success' | 'err
                                 : 'Un membre ne voit que les sections cochées. Notre équipe et l’Administration restent réservées aux administrateurs.'}
                         </p>
                     </fieldset>
+                    {/* Not a section: it is off for an admin too until ticked,
+                        and it opens the whole database whatever is ticked above. */}
+                    <fieldset>
+                        <legend className="block text-xs font-semibold text-ink-mute mb-1.5">Connecteur Claude</legend>
+                        <label className="flex items-center gap-2.5 text-sm font-medium text-ink-secondary cursor-pointer">
+                            <input type="checkbox"
+                                   checked={form.can_use_claude === true}
+                                   onChange={e => setForm(f => ({ ...f, can_use_claude: e.target.checked }))}
+                                   className="w-4 h-4 accent-primary rounded-xs" />
+                            Peut interroger les données avec Claude
+                        </label>
+                        <p className={cn('text-2xs mt-2',
+                                         form.can_use_claude
+                                             ? 'bg-tone-warn-soft border border-tone-warn/40 rounded-md px-3 py-2 text-tone-warn-ink'
+                                             : 'text-ink-mute')}>
+                            En lecture seulement, mais sur toutes les données : les ventes de tous les représentants, les clients, la paie et les commissions, quels que soient le rôle et les sections cochées.
+                        </p>
+                    </fieldset>
                     <div className="flex items-center gap-3">
                         <button onClick={handleSave} disabled={saving || !form.email.trim()}
                             className="btn btn-md btn-primary">
@@ -930,20 +949,22 @@ function UsersManager({ setMessage }: { setMessage: (m: { type: 'success' | 'err
     );
 }
 
-/** The sections a user can open, as chips. An admin has them all by role. */
+/**
+ * The sections a user can open, as chips. An admin has them all by role. Black
+ * for Claude: it opens more than any section, and has to be seen at a glance.
+ */
 function SectionChips({ user }: { user: AllowedUser }) {
     const chip = 'px-2 py-0.5 rounded-full text-2xs font-semibold whitespace-nowrap';
-    if (user.role === 'admin') {
-        return <span className={cn(chip, 'bg-stone text-ink-secondary')}>Toutes</span>;
-    }
     const flags = flagsOf(user);
     const open = SECTIONS.filter(s => flags[s.column]);
-    if (open.length === 0) {
-        return <span className={cn(chip, 'bg-tone-warn-soft text-tone-warn-ink')}>Aucune</span>;
-    }
     return (
         <div className="flex flex-wrap gap-1">
-            {open.map(s => <span key={s.key} className={cn(chip, 'bg-stone text-ink-secondary')}>{s.label}</span>)}
+            {user.role === 'admin'
+                ? <span className={cn(chip, 'bg-stone text-ink-secondary')}>Toutes</span>
+                : open.length === 0
+                    ? <span className={cn(chip, 'bg-tone-warn-soft text-tone-warn-ink')}>Aucune</span>
+                    : open.map(s => <span key={s.key} className={cn(chip, 'bg-stone text-ink-secondary')}>{s.label}</span>)}
+            {user.can_use_claude && <span className={cn(chip, 'bg-ink text-white')}>Claude</span>}
         </div>
     );
 }

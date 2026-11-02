@@ -35,7 +35,7 @@ import {
     type SpendRange, type SpendPeriodKey,
 } from '../components/accounts/spendRange';
 import {
-    formatShortDate, formatCurrencyCAD, formatPhone, phoneSearchPattern, cn,
+    formatShortDate, formatCurrencyCAD, formatPhone, phoneSearchPattern, sanitizeSearch, cn,
 } from '../lib/utils';
 
 /**
@@ -77,15 +77,6 @@ const NO_REPS: string[] = [];
 
 /** Zoho writes "-None-" into a picklist that was never set. */
 const isBlankPick = (v: string | null): boolean => !v || v === '-None-';
-
-/**
- * PostgREST's `or` filter is comma-separated and paren-grouped, so those
- * characters in a search term would corrupt the query rather than match text.
- * `%` and `_` are ilike wildcards and are escaped so they match literally.
- */
-function sanitizeSearch(raw: string): string {
-    return raw.replace(/[,()]/g, ' ').replace(/[%_\\]/g, '\\$&').trim();
-}
 
 export default function AccountsDetail() {
     const [yearParam, _setYearParam] = useUrlState('year', 'Toutes');
@@ -232,8 +223,6 @@ export default function AccountsDetail() {
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [search]);
 
-    const [serviceVariants, setServiceVariants] = useState<Record<string, string[]>>({});
-
     /**
      * Bounds for the year/month filter, as an ISO half-open range on
      * created_time. Built in Montreal time so an account created 31 December at
@@ -290,11 +279,8 @@ export default function AccountsDetail() {
         // 977 accounts with no rating, silently hiding them.
         if (ratingScope !== 'Tous') query = query.eq('is_internal', false);
         if (ratings.length > 0) query = query.in('rating', ratings);
-        if (selectedServices.length > 0) {
-            // overlaps, not contains: match every spelling of every selected service.
-            query = query.overlaps('service_interest',
-                selectedServices.flatMap(s => serviceVariants[s] ?? [s]));
-        }
+        // What the account was billed for, never the CRM's Service field.
+        if (selectedServices.length > 0) query = query.overlaps('invoice_departments', selectedServices);
 
         const term = sanitizeSearch(debouncedSearch);
         if (term) {
@@ -317,7 +303,7 @@ export default function AccountsDetail() {
         }
         return query;
     }, [dateBounds, repFilter, selectedSources, selectedServices, selectedDomaines,
-        selectedRegions, selectedInvoiced, ratingScope, ratings, debouncedSearch, serviceVariants]);
+        selectedRegions, selectedInvoiced, ratingScope, ratings, debouncedSearch]);
 
     /** How many accounts a draft amount range keeps, with every other filter on. */
     const countForAmount = useCallback(async (draft: SpendRange): Promise<number | null> => {
@@ -385,7 +371,7 @@ export default function AccountsDetail() {
                 // rep carried only by internal accounts when that filter is on.
                 p_exclude_ratings: null,
             }, { single: true });
-        if (data) { setOptions(data); setServiceVariants(data.service_variants ?? {}); }
+        if (data) setOptions(data);
     }, [year]);
 
     const fetchDataRef = useRef(fetchData);
@@ -588,7 +574,7 @@ export default function AccountsDetail() {
                 <FilterGroup label="Source">
                     <MultiSelect values={selectedSources} onChange={setSelectedSources} options={optionList(options?.sources)} allLabel="Toutes les sources" className="w-52" />
                 </FilterGroup>
-                <FilterGroup label="Service">
+                <FilterGroup label="Service facturé">
                     <MultiSelect values={selectedServices} onChange={setSelectedServices} options={optionList(options?.services)} allLabel="Tous les services" className="w-48" />
                 </FilterGroup>
                 <FilterGroup label="Domaine">

@@ -1,5 +1,5 @@
 /**
- * The "Montant facturé" filter on Comptes · Détail: which amount it reads, over
+ * The "Montant facturé" filter on the Comptes screens: which amount it reads, over
  * which period, and the scale its slider moves on.
  *
  * Amounts are net (credit notes subtracted), from zoho_accounts_enriched. Each
@@ -239,6 +239,20 @@ export type SpendRange = { min: number | null; max: number | null; period: Spend
 
 export function isSpendFilterActive(r: SpendRange): boolean {
     return (r.min !== null && r.min > 0) || r.max !== null;
+}
+
+/**
+ * The range as RPC arguments, on the rule the detail table applies: zero at the
+ * bottom is "no minimum". Empty when the filter is off, so such a call stays one
+ * a database without the parameters still answers.
+ */
+export function spendRangeArgs(r: SpendRange): Record<string, string | number> {
+    if (!isSpendFilterActive(r)) return {};
+    return {
+        p_amount_period: r.period,
+        ...(r.min !== null && r.min > 0 ? { p_amount_min: r.min } : {}),
+        ...(r.max !== null ? { p_amount_max: r.max } : {}),
+    };
 }
 
 /** "≥ 10 k$", "≤ 5 k$", "5 k$ – 20 k$". */

@@ -122,6 +122,15 @@ export function formatPhone(raw: string | null | undefined): string | null {
 // than a guess at every separator style in the data.
 const PHONE_SHAPED = /^[\d\s()+.-]+$/;
 
+/**
+ * PostgREST's `or` filter is comma-separated and paren-grouped, so those
+ * characters in a search term would corrupt the query rather than match text.
+ * `%` and `_` are ilike wildcards and are escaped so they match literally.
+ */
+export function sanitizeSearch(raw: string): string {
+    return raw.replace(/[,()]/g, ' ').replace(/[%_\\]/g, '\\$&').trim();
+}
+
 export function phoneSearchPattern(term: string): string {
     const digits = term.replace(/\D/g, '');
     // Below four digits the loose pattern matches most of the table, and a term

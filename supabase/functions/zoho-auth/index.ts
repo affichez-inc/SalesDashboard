@@ -94,7 +94,7 @@ Deno.serve(async (req: Request) => {
     // Utilisateurs, which stores the address in lower case, as `email` is here.
     const { data: allowed, error: allowedError } = await admin
       .from('allowed_users')
-      .select('email, role, can_access_factures, rep_name')
+      .select('email, role, can_access_factures, rep_name, can_use_claude')
       .eq('email', email)
       .maybeSingle();
 
@@ -103,7 +103,7 @@ Deno.serve(async (req: Request) => {
       return Response.redirect(`${redirectBase}?auth_error=server_error`, 302);
     }
 
-    const userRow = allowed as { role: string; can_access_factures: boolean; rep_name: string | null } | null;
+    const userRow = allowed as { role: string; can_access_factures: boolean; rep_name: string | null; can_use_claude: boolean } | null;
     if (!userRow) {
       return Response.redirect(`${redirectBase}?auth_error=not_authorized`, 302);
     }
@@ -130,6 +130,19 @@ Deno.serve(async (req: Request) => {
     const userId = linkData.user?.id;
     if (userId) {
       await admin.auth.admin.updateUserById(userId, { user_metadata: userMeta });
+    }
+
+    // ─── 4c. Claude connector: the account must have no password ──────────────
+    // generateLink gives a new account a random password, and the mcp function
+    // refuses any account that has one. Saving the flag again runs the
+    // allowed_users trigger, which clears it. A failure only leaves the
+    // connector refusing this account: the sign-in itself goes on.
+    if (userRow.can_use_claude) {
+      const { error: claudeError } = await admin
+        .from('allowed_users')
+        .update({ can_use_claude: true })
+        .eq('email', email);
+      if (claudeError) console.error('clearing the password failed:', claudeError.message);
     }
 
     // ─── 5. Verify the token server-side → capture session tokens → forward ──

@@ -179,10 +179,29 @@ the Statut scope), where ticking both would only mean "all".
   objectives, sent by `useRepFilter` only when every selected rep is on the sales
   team. A selection that includes "Interne" has no objective, like Interne alone.
 - **A breakdown ignores its own dimension** in both forms (`get_zoho_accounts_by_source`
-  does not receive the source selection), so the table keeps every bar. The by-rep
-  table is the one exception it always was: a single rep leaves it whole, a list
+  does not receive the source selection), so the table keeps every bar. "Par service" is the
+  exception (filtered on a service the page shows that service only), and so is the by-rep
+  table as it always was: a single rep leaves it whole, a list
   (Interne, or several reps) narrows it to its members.
 - Lists are sent in option order, so the same selection is the same cache key.
+
+### Filters live behind a button
+
+`FilterBar` keeps up to four filters on the bar. With more, only the `pinned` ones stay
+(search and the period) and a **Filtres** button opens a drawer with the rest. Each active
+hidden filter is a chip under the bar: its cross clears it, its text opens the drawer, and the
+button carries the count. No page changes for this beyond `pinned` on a `FilterGroup`, and
+`resetTo` on a single-choice one, its "no filter" value, which is how the chip knows it is on.
+A control that is neither `Select` nor `MultiSelect` passes `chip` itself (the amount filter).
+
+- **Filters apply as they are picked, with no Apply button**, because every screen answers well
+  under a second. The drawer has no backdrop for the same reason: the figures move beside it. An
+  Apply step belongs here only if a screen gets slower than a second or two.
+- **A dropdown in the drawer opens in the flow** (`useInFilterPanel`), not floating: a floating
+  menu would be cut by the drawer's scrolling. It also stops closing on an outside click, which
+  would move the next filter from under the pointer between mousedown and click.
+- **Chips are read off the control's own props** (`chipOf`), so `Select` and `MultiSelect` must
+  stay direct children of `FilterGroup`. Wrap one and its chip silently disappears.
 
 ### Read this before you write a statistic
 
@@ -626,9 +645,18 @@ Three things about the Comptes module that are not obvious:
   list is the invoice departments and an account matches when it holds a real invoice (not a
   credit note) in one of them: `p_services` on the Comptes RPCs, `invoice_departments` on the view.
   An account never billed matches no service, nor does one billed only before departments existed.
-  The "Par service" breakdown, the Service column and Publicité's own filter still read the CRM
-  field (`service_interest`), which is why `zoho_accounts_scoped` keeps `p_services` for it and
-  takes the billed list as `p_billed_services`.
+  The "Par service" breakdown and the Service column read the same departments. Publicité's own
+  filter still reads the CRM field (`service_interest`), which is why `zoho_accounts_scoped` keeps
+  `p_services` for it and takes the billed list as `p_billed_services`.
+- **Filtered on a service, every amount is that service's**
+  (`20261102160000_comptes_service_revenue_and_breakdown.sql`): a client with 1 k$ in NUMERIQUE and
+  9 k$ in PROMOTIONNEL reads 1 k$ filtered on NUMERIQUE. KPIs, breakdowns, the monthly series, the
+  table, its exports, the Service column and the Montant facturé filter all follow; the billing
+  history a row opens stays whole. `zoho_accounts_enriched_for(p_departments)` is the view's query
+  with the invoices narrowed, and the view is that function with no list, so the date arithmetic
+  has one copy. **A credit note with no department belongs to no service** (116 since 2025, -341 k$
+  on 2026-11-02), so it lowers the unfiltered total and no service's: the services can add up to
+  more than the total (2026 cohort: 1 706 068 $ against 1 698 928 $).
 - **The dashboard takes the detail page's filters**: Recherche, Factures and Montant facturé, under
   the same URL params, and they keep the same accounts. The amounts are the view's own columns, so
   the RPCs read `zoho_accounts_enriched` rather than a second copy of its date arithmetic. The
@@ -1070,7 +1098,7 @@ Consequences worth knowing before you edit the tree:
 - **`src/lib/csv.ts`** + **`src/components/ExportButton.tsx`**: CSV export for any table. Semicolon-delimited with a UTF-8 BOM because these files are opened in a French-locale Excel; numbers use a decimal comma and stay unquoted so they arrive as numbers. On a paginated table, pass `rows` as an async function that refetches without the page limit — exporting the visible 100 rows would answer a different question from the one on screen.
 - **`src/lib/constants.ts`**: `DEPARTMENTS`, `MONTHS`, `OFFICES`, `SALE_STATUSES` — used as filter option sources across all pages
 - **`src/types/database.ts`**: TypeScript types mirroring Supabase view/RPC return shapes (`SommaireRow`, `ZoneA_SummaryRow`, `ZoneB_DetailRow`, `YoYRow`, etc.)
-- **`src/components/FilterBar.tsx`**: `<FilterBar>` / `<FilterGroup>` composable filter bar used on every page
+- **`src/components/FilterBar.tsx`**: `<FilterBar>` / `<FilterGroup>` filter bar used on every page, with a drawer past four filters. See **Filters live behind a button**
 - **`src/components/Select.tsx`**: Reusable styled dropdown with an `accent` variant (brand orange). One value: periods, modes, two-value filters
 - **`src/components/MultiSelect.tsx`** + **`useUrlList`** (`src/hooks/useUrlState.ts`): the same dropdown taking several values, for category filters. See **Filters take several values**
 - **`src/hooks/useRepFilter.ts`**: the rep filter (Interne + the team by name). Returns `rep` / `reps` / `targetReps` for the RPCs and `matches()` for pages that filter in memory
@@ -1231,6 +1259,10 @@ The `Settings` page uses an internal tab system (`reps | objectives | quarters |
   instead (`Layout`'s open sections, `MonthlyDetail`'s period).
 - **No `Date.now()` during render**: `useNow()` (`hooks/useNow.ts`) gives a time
   that refreshes, for "il y a 3 min" labels.
+- **A table whose rows change with a filter carries `translate="no"` on its `tbody` and `tfoot`.**
+  Chrome Translate is on for these users and replaces text nodes with its own; React then
+  crashes the screen removing one (`SommaireTable` and `QuarterBlock` did, on 2026-11-02). A
+  headless browser never shows it: test a new screen with Translate on.
 - **A file exporting a component exports only components** (Fast Refresh): a
   context lives in `XContext.ts` with its hook, its provider in `XProvider.tsx`.
   `branding/reference` is the brand kit's own code and is not linted.

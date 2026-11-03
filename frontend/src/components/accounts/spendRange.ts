@@ -255,6 +255,16 @@ export function spendRangeArgs(r: SpendRange): Record<string, string | number> {
     };
 }
 
+/** The filter as a chip on the filter bar; null when it is off. */
+export function amountChip(r: SpendRange, today: string | null, onChange: (next: SpendRange) => void) {
+    if (!isSpendFilterActive(r)) return null;
+    const period = r.period === 'tout' ? '' : ` · ${spendPeriodShort(r.period, today)}`;
+    return {
+        text: describeSpendRange(r) + period,
+        onClear: () => onChange({ min: null, max: null, period: DEFAULT_SPEND_PERIOD }),
+    };
+}
+
 /** "≥ 10 k$", "≤ 5 k$", "5 k$ – 20 k$". */
 export function describeSpendRange(r: Pick<SpendRange, 'min' | 'max'>): string {
     const lo = r.min !== null && r.min > 0 ? r.min : null;

@@ -369,16 +369,16 @@ export default function Advertising({ basis }: { basis: AdBasis }) {
             </div>
 
             <FilterBar>
-                <FilterGroup label="Année">
+                <FilterGroup label="Année" pinned>
                     <Select value={yearParam}
                             onChange={v => setYearParam(v, v === 'Toutes' ? { month: null } : undefined)}
                             options={YEAR_OPTIONS} variant="accent" className="w-40" />
                 </FilterGroup>
-                <FilterGroup label="Mois">
+                <FilterGroup label="Mois" pinned>
                     <Select value={yearValue === null ? 'Toutes' : monthParam} onChange={setMonthParam}
                             options={monthOptions} className="w-40" disabled={yearValue === null} />
                 </FilterGroup>
-                <FilterGroup label="Fenêtre de revenus">
+                <FilterGroup label="Fenêtre de revenus" resetTo="12">
                     <Select value={windowParam} onChange={setWindowParam}
                             options={WINDOW_OPTIONS} variant="accent" className="w-44" />
                 </FilterGroup>
@@ -406,7 +406,7 @@ export default function Advertising({ basis }: { basis: AdBasis }) {
                     const picked = (pickedAdAccounts ?? []).filter(a => a.platform === f.channel).map(a => a.id);
                     const logo = <ChannelLogo channel={f.channel} size="xs" />;
                     return (
-                        <FilterGroup key={f.channel} label={`Compte ${CHANNEL_LABEL[f.channel]}`}>
+                        <FilterGroup key={f.channel} label={`Compte ${CHANNEL_LABEL[f.channel]}`} resetTo={ALL_AD_ACCOUNTS}>
                             {f.options.length === 2 ? (
                                 // Two accounts leave three choices: all, one, or the other.
                                 // A list to tick would let both be ticked, which is "all"
@@ -434,7 +434,7 @@ export default function Advertising({ basis }: { basis: AdBasis }) {
                         </FilterGroup>
                     );
                 })}
-                <FilterGroup label="Statut">
+                <FilterGroup label="Statut" resetTo="Clients">
                     <Select value={ratingScope} onChange={setRatingScope} className="w-52"
                             options={[
                                 { value: 'Clients', label: 'Clients seulement' },

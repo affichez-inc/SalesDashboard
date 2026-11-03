@@ -417,7 +417,7 @@ export default function LeadsDetail({ propRepName }: { propRepName?: string }) {
             </div>
 
             <FilterBar>
-                <FilterGroup label="Année">
+                <FilterGroup label="Année" pinned>
                     <Select
                         value={year === 'Toutes' ? 'Toutes' : String(year)}
                         onChange={v => setYear(v === 'Toutes' ? 'Toutes' : Number(v))}
@@ -425,7 +425,7 @@ export default function LeadsDetail({ propRepName }: { propRepName?: string }) {
                         variant="accent"
                     />
                 </FilterGroup>
-                <FilterGroup label="Mois">
+                <FilterGroup label="Mois" pinned>
                     <Select
                         value={selectedMonth === 'Toutes' ? 'Toutes' : String(selectedMonth)}
                         onChange={v => setSelectedMonth(v === 'Toutes' ? 'Toutes' : Number(v))}
@@ -446,10 +446,10 @@ export default function LeadsDetail({ propRepName }: { propRepName?: string }) {
                     <MultiSelect values={selectedServices} onChange={setSelectedServices} options={serviceOptions}
                                  allLabel="Tous les services" className="w-48" />
                 </FilterGroup>
-                <FilterGroup label="Type">
+                <FilterGroup label="Type" resetTo="Tous">
                     <Select value={selectedStage} onChange={setSelectedStage} options={stageOptions} />
                 </FilterGroup>
-                <FilterGroup label="Factures">
+                <FilterGroup label="Factures" resetTo="Tous">
                     <Select value={selectedInvoiced} onChange={setSelectedInvoiced} options={invoicedOptions} />
                 </FilterGroup>
             </FilterBar>

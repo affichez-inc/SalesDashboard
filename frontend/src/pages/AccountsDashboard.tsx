@@ -10,7 +10,7 @@ import type {
 import { MonthlyEvolution } from '../components/accounts/MonthlyEvolution';
 import { AmountRangeFilter } from '../components/accounts/AmountRangeFilter';
 import {
-    DEFAULT_SPEND_PERIOD, isSpendFilterActive, spendPeriod, spendRangeArgs,
+    DEFAULT_SPEND_PERIOD, amountChip, isSpendFilterActive, spendPeriod, spendRangeArgs,
     type SpendPeriodKey, type SpendRange,
 } from '../components/accounts/spendRange';
 import { MONTHS } from '../lib/constants';
@@ -232,7 +232,10 @@ export default function AccountsDashboard() {
             // breakdown to a single bar with nothing to compare it against.
             cachedRpc('get_zoho_accounts_by_rep',    { ...shared, p_reps: reps, p_sources: sources, p_services: services, p_domaines: domaines }),
             cachedRpc('get_zoho_accounts_by_source', { ...shared, p_rep: rep, p_reps: reps, p_services: services, p_domaines: domaines }),
-            cachedRpc('get_zoho_accounts_by_service',{ ...shared, p_rep: rep, p_reps: reps, p_sources: sources, p_domaines: domaines }),
+            // The one breakdown that keeps its own dimension: filtered on a service
+            // the page shows that service only, this table included. Sent only when
+            // set, so a database that predates the parameter still answers.
+            cachedRpc('get_zoho_accounts_by_service',{ ...shared, p_rep: rep, p_reps: reps, p_sources: sources, p_domaines: domaines, ...(services ? { p_services: services } : {}) }),
             cachedRpc('get_zoho_accounts_by_domaine',{ ...shared, p_rep: rep, p_reps: reps, p_sources: sources, p_services: services }),
             cachedRpc('get_zoho_accounts_monthly_summary', { ...monthlyArgs, p_year: yearParamValue }),
             cachedRpc('get_zoho_accounts_monthly_summary', {
@@ -350,6 +353,9 @@ export default function AccountsDashboard() {
     );
     const optionList = (values: string[] | undefined) => (values ?? []).map(v => ({ value: v, label: v }));
 
+    /** Filtered on a service, every revenue figure on the page is that service's only. */
+    const serviceScope = selectedServices.length > 0 ? ` (${selectedServices.join(', ')} seulement)` : '';
+
     const windowLabel = windowParam === 'Toute'
         ? 'tout l’historique'
         : `${windowParam} mois suivant la création du compte`;
@@ -364,7 +370,7 @@ export default function AccountsDashboard() {
             </div>
 
             <FilterBar>
-                <FilterGroup label="Recherche">
+                <FilterGroup label="Recherche" pinned>
                     <div className="relative">
                         <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-ink-mute" />
                         <input
@@ -378,21 +384,21 @@ export default function AccountsDashboard() {
                         />
                     </div>
                 </FilterGroup>
-                <FilterGroup label="Année">
+                <FilterGroup label="Année" pinned>
                     <Select
                         value={year === 'Toutes' ? 'Toutes' : String(year)}
                         onChange={v => setYear(v === 'Toutes' ? 'Toutes' : Number(v))}
                         options={yearOptions} variant="accent" className="w-40"
                     />
                 </FilterGroup>
-                <FilterGroup label="Mois">
+                <FilterGroup label="Mois" pinned>
                     <Select
                         value={String(selectedMonth)}
                         onChange={v => setSelectedMonth(v === 'Toutes' ? 'Toutes' : Number(v))}
                         options={monthOptions} className="w-40"
                     />
                 </FilterGroup>
-                <FilterGroup label="Fenêtre de revenus">
+                <FilterGroup label="Fenêtre de revenus" resetTo="12">
                     <Select value={windowParam} onChange={setWindowParam} options={WINDOW_OPTIONS} variant="accent" className="w-44" />
                 </FilterGroup>
                 <FilterGroup label="Représentant">
@@ -411,7 +417,7 @@ export default function AccountsDashboard() {
                 <FilterGroup label="Région">
                     <MultiSelect values={selectedRegions} onChange={setSelectedRegions} options={optionList(options?.regions)} allLabel="Toutes les régions" className="w-44" />
                 </FilterGroup>
-                <FilterGroup label="Factures">
+                <FilterGroup label="Factures" resetTo="Tous">
                     <Select
                         value={selectedInvoiced} onChange={setSelectedInvoiced} className="w-44"
                         options={[
@@ -422,7 +428,7 @@ export default function AccountsDashboard() {
                     />
                 </FilterGroup>
                 {spendMax && (
-                    <FilterGroup label="Montant facturé">
+                    <FilterGroup label="Montant facturé" chip={amountChip(amountRange, spendMax.today, setAmountRange)}>
                         <AmountRangeFilter
                             value={amountRange} onApply={setAmountRange}
                             maxima={spendMax} previewCount={countForAmount}
@@ -430,7 +436,7 @@ export default function AccountsDashboard() {
                         />
                     </FilterGroup>
                 )}
-                <FilterGroup label="Statut">
+                <FilterGroup label="Statut" resetTo="Clients">
                     <Select
                         value={ratingScope} onChange={setRatingScope} className="w-52"
                         options={[
@@ -479,6 +485,7 @@ export default function AccountsDashboard() {
                             subText={windowParam === 'Toute'
                                 ? 'Tout l\u2019historique de facturation'
                                 : `Factur\u00e9 dans les ${windowParam} mois suivant la cr\u00e9ation`}
+                            scope={serviceScope}
                             icon={DollarSign}
                             hint={`Factures datées entre la création du compte et ${windowLabel}. La fenêtre est ce qui rend deux mois comparables : sans elle, un compte de 2021 bat toujours un compte de 2026 simplement parce qu'il a eu cinq ans de plus pour acheter. « Historique complet » ignore la fenêtre.`}
                         />
@@ -488,6 +495,7 @@ export default function AccountsDashboard() {
                             subText={kpis?.avg_days_to_first_invoice != null
                                 ? `1re facture après ${Math.round(kpis.avg_days_to_first_invoice)} jours en moyenne`
                                 : 'Aucune facture sur la période'}
+                            scope={serviceScope}
                             icon={Timer}
                             hint="Revenus attribués ÷ comptes créés. Divisé par tous les comptes, pas seulement les comptes facturés : les comptes qui n'ont rien acheté sont précisément ce qui rend une source mauvaise, les retirer du calcul cacherait le problème. C'est le chiffre à comparer d'un mois à l'autre et d'une source à l'autre."
                         />
@@ -522,8 +530,8 @@ export default function AccountsDashboard() {
                             note="Le secteur du client selon le CRM. Renseigné sur environ deux comptes sur trois."
                         />
                         <BreakdownTable
-                            title="Par service" rows={byService} filename="comptes_par_service"
-                            note="Un compte peut cocher plusieurs services : le total des lignes dépasse le nombre de comptes."
+                            title="Par service facturé" rows={byService} filename="comptes_par_service"
+                            note="Le service des factures, jamais le champ du CRM. Un compte facturé dans plusieurs services compte dans chacun, avec le montant de ce service seulement ; un compte jamais facturé n'y figure pas."
                         />
                     </div>
                 </>
@@ -625,10 +633,12 @@ function BreakdownTable({ title, rows, note, filename, people }: {
     );
 }
 
-function KPICard({ title, value, subText, icon: Icon, highlight, hint }: {
+function KPICard({ title, value, subText, scope, icon: Icon, highlight, hint }: {
     title: string;
     value: string;
     subText: string;
+    /** Appended to the sub-text: what the figure is limited to. */
+    scope?: string;
     icon: React.ElementType;
     highlight?: boolean;
     hint?: string;
@@ -649,7 +659,7 @@ function KPICard({ title, value, subText, icon: Icon, highlight, hint }: {
             <div>
                 <p className="text-2xs md:text-xs font-semibold text-ink-mute uppercase tracking-eyebrow leading-tight">{title}</p>
                 <p className="mt-1 text-base md:text-2xl font-bold text-ink tabular-nums">{value}</p>
-                <p className="text-2xs text-ink-mute mt-0.5 md:mt-1 font-medium italic">{subText}</p>
+                <p className="text-2xs text-ink-mute mt-0.5 md:mt-1 font-medium italic">{subText}{scope}</p>
             </div>
         </div>
     );

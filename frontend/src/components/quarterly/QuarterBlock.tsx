@@ -123,7 +123,7 @@ export function QuarterBlock({
                             </th>
                         </tr>
                     </thead>
-                    <tbody className="divide-y divide-hairline">
+                    <tbody className="divide-y divide-hairline" translate="no">
                         {sortedData.length === 0 ? (
                             <tr>
                                 <td colSpan={4} className="px-5 py-8 text-center text-sm text-ink-mute italic">
@@ -161,7 +161,7 @@ export function QuarterBlock({
                             })
                         )}
                     </tbody>
-                    <tfoot>
+                    <tfoot translate="no">
                         <tr className="bg-ink text-white font-bold">
                             <td className="px-3 md:px-5 py-3 md:py-3.5 text-xs uppercase tracking-label sticky left-0 bg-ink z-10">Total équipe</td>
                             <td className="px-4 py-3.5 text-right whitespace-nowrap">

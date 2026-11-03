@@ -8,6 +8,7 @@ import { SommaireTable } from '../components/dashboard/SommaireTable';
 import { DEPARTMENTS, MONTHS, OFFICES, INVOICE_STATUSES } from '../lib/constants';
 import { useRepTeam, mergeInternalRows, INTERNAL_LABEL } from '../lib/repTeam';
 import { FilterBar, FilterGroup } from '../components/FilterBar';
+import { ClearFiltersButton } from '../components/ClearFiltersButton';
 import { Select } from '../components/Select';
 import { MultiSelect } from '../components/MultiSelect';
 import { formatCurrencyCAD, formatShortDate, cn } from '../lib/utils';
@@ -64,6 +65,19 @@ export default function FDashboard() {
     const setSelectedMonth = (v: number | 'Toutes') => _setMonthParam(v === 'Toutes' ? 'Toutes' : String(v));
     // Admin can switch reps; members are locked to their own rep, whatever the URL says.
     const [selectedReps, setSelectedReps] = useUrlList('rep');
+
+    /** Back to the default view in one navigation: see UrlStateCompanions. */
+    const clearFilters = () => setYear(2026, {
+        office: null, status: null, dept: null, month: null, rep: null,
+    });
+    const activeFilterCount = [
+        year !== 2026,
+        selectedOffice !== 'Toutes',
+        selectedStatuses.length > 0,
+        selectedDepts.length > 0,
+        selectedMonth !== 'Toutes',
+        isAdmin && selectedReps.length > 0,
+    ].filter(Boolean).length;
 
     const [loading, setLoading] = useState(true);
     const [showLeaderboard, setShowLeaderboard] = useState(false);
@@ -348,10 +362,10 @@ export default function FDashboard() {
             </div>
 
             <FilterBar>
-                <FilterGroup label="Année">
+                <FilterGroup label="Année" pinned>
                     <Select value={String(year)} onChange={(val) => setYear(Number(val))} options={yearOptions} variant="accent" className="w-28" />
                 </FilterGroup>
-                <FilterGroup label="Siège">
+                <FilterGroup label="Siège" resetTo="Toutes">
                     <Select value={selectedOffice} onChange={setSelectedOffice} options={officeOptions} className="w-44" />
                 </FilterGroup>
                 <FilterGroup label="Statut">
@@ -362,7 +376,7 @@ export default function FDashboard() {
                     <MultiSelect values={selectedDepts} onChange={setSelectedDepts} options={deptOptions}
                                  allLabel="Tous services" className="w-48" />
                 </FilterGroup>
-                <FilterGroup label="Mois">
+                <FilterGroup label="Mois" pinned>
                     <Select value={String(selectedMonth)} onChange={(val) => setSelectedMonth(val === 'Toutes' ? 'Toutes' : Number(val))} options={monthOptions} className="w-40" />
                 </FilterGroup>
                 {isAdmin && (
@@ -371,6 +385,7 @@ export default function FDashboard() {
                                      allLabel={REP_ALL_LABEL} allIcon={repFilter.allIcon} className="w-48" />
                     </FilterGroup>
                 )}
+                <ClearFiltersButton activeCount={activeFilterCount} onClear={clearFilters} />
             </FilterBar>
 
             {loading ? (

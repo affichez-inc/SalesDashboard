@@ -277,6 +277,10 @@
     animation: menu-in var(--duration-fast) var(--ease-out);
   }
 
+  .drawer-in {
+    animation: drawer-in var(--duration-fast) var(--ease-out);
+  }
+
   /* Two native range inputs stacked on one track, for a min/max slider. Each
      stays a real input - keyboard, focus and screen reader for free - and only
      the thumbs take the pointer, so a click on the track is never stolen by
@@ -326,6 +330,13 @@
   }
   .range-dual:focus-visible::-moz-range-thumb {
     box-shadow: 0 0 0 4px var(--color-ring);
+  }
+}
+
+@keyframes drawer-in {
+  from {
+    transform: translateX(1.5rem);
+    opacity: 0;
   }
 }
 

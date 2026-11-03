@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { ChevronDown, Check, Search } from 'lucide-react';
 import { cn, foldForSearch } from '../lib/utils';
+import { useInFilterPanel, useRevealInPanel } from './FilterPanelContext';
 
 /**
  * From this many options the dropdown grows a search box. Some of these lists are
@@ -24,7 +25,7 @@ export interface SelectOption {
     hint?: string;
 }
 
-interface SelectProps {
+export interface SelectProps {
     value: string;
     onChange: (value: string) => void;
     options: SelectOption[];
@@ -48,6 +49,7 @@ export function Select({
     const [open, setOpen] = useState(false);
     const [query, setQuery] = useState('');
     const containerRef = useRef<HTMLDivElement>(null);
+    const menuRef = useRef<HTMLDivElement>(null);
     const searchRef = useRef<HTMLInputElement>(null);
 
     const selected = options.find(o => o.value === value);
@@ -63,9 +65,14 @@ export function Select({
     // "dent" in it would look like half the options had vanished.
     const close = useCallback(() => { setOpen(false); setQuery(''); }, []);
 
-    // Close on outside click
+    const inPanel = useInFilterPanel();
+    useRevealInPanel(open, menuRef);
+
+    // Close on outside click. Not in the drawer: the list is in the flow there, so
+    // closing it on mousedown would move the next filter from under the pointer
+    // before the click lands. Escape is left to the drawer too.
     useEffect(() => {
-        if (!open) return;
+        if (!open || inPanel) return;
         const handler = (e: MouseEvent) => {
             if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
                 close();
@@ -73,15 +80,15 @@ export function Select({
         };
         document.addEventListener('mousedown', handler);
         return () => document.removeEventListener('mousedown', handler);
-    }, [open, close]);
+    }, [open, inPanel, close]);
 
     // Keyboard: Escape to close
     useEffect(() => {
-        if (!open) return;
+        if (!open || inPanel) return;
         const handler = (e: KeyboardEvent) => { if (e.key === 'Escape') close(); };
         document.addEventListener('keydown', handler);
         return () => document.removeEventListener('keydown', handler);
-    }, [open, close]);
+    }, [open, inPanel, close]);
 
     const handleSelect = (val: string) => {
         onChange(val);
@@ -98,10 +105,11 @@ export function Select({
         }
     }, [open, showSearch]);
 
-    const isAccent = variant === 'accent';
+    // In the drawer every filter is plain: there, orange would read as "this one is on".
+    const isAccent = variant === 'accent' && !inPanel;
 
     return (
-        <div ref={containerRef} className={cn("relative max-w-full", className)}>
+        <div ref={containerRef} className={cn("relative max-w-full", className, inPanel && "w-full")}>
             {/* Trigger */}
             <button
                 type="button"
@@ -127,9 +135,9 @@ export function Select({
 
             {/* Dropdown */}
             {open && (
-                <div className={cn(
-                    "absolute z-50 top-full mt-1.5 left-0 min-w-full bg-white rounded-lg border border-hairline shadow-xl overflow-hidden",
-                    "menu-in"
+                <div ref={menuRef} className={cn(
+                    "mt-1.5 bg-white rounded-lg border border-hairline overflow-hidden menu-in",
+                    !inPanel && "absolute z-50 top-full left-0 min-w-full shadow-xl"
                 )}>
                     {showSearch && (
                         <div className="relative border-b border-hairline p-2">

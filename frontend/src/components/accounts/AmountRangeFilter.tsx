@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect, useLayoutEffect, useMemo, useCallback } from 'react';
 import { ChevronDown, Loader2 } from 'lucide-react';
 import { cn } from '../../lib/utils';
+import { useInFilterPanel, useRevealInPanel } from '../FilterPanelContext';
 import type { AccountSpendMax } from '../../types/database';
 import {
     SPEND_PERIODS, SLIDER_STEPS, spendPeriod, spendPeriodLabel, spendPeriodShort,
@@ -45,6 +46,8 @@ export function AmountRangeFilter({ value, onApply, maxima, previewCount, classN
     const [preview, setPreview] = useState<{ key: string; n: number | null }>({ key: '', n: null });
     const containerRef = useRef<HTMLDivElement>(null);
     const panelRef = useRef<HTMLDivElement>(null);
+    const inPanel = useInFilterPanel();
+    useRevealInPanel(open, panelRef);
 
     const today = maxima?.today ?? null;
     const active = isSpendFilterActive(value);
@@ -52,7 +55,9 @@ export function AmountRangeFilter({ value, onApply, maxima, previewCount, classN
     const period = spendPeriod(draft.period);
     const scale = useMemo(() => spendScale(maxima?.[period.maxKey] ?? null), [maxima, period.maxKey]);
     const top = scaleTop(scale);
-    const ticks = useMemo(() => scaleTicks(scale), [scale]);
+    // The drawer's track is narrower: a label close to the top one would run into it.
+    const ticks = useMemo(() => scaleTicks(scale).filter(t =>
+        !inPanel || t.pos === SLIDER_STEPS || t.pos < SLIDER_STEPS * 0.8), [scale, inPanel]);
 
     const syncTexts = useCallback((r: SpendRange) => {
         setMinText(r.min !== null && r.min > 0 ? formatInputAmount(r.min) : '');
@@ -79,7 +84,7 @@ export function AmountRangeFilter({ value, onApply, maxima, previewCount, classN
     useLayoutEffect(() => {
         const panel = panelRef.current;
         const anchor = containerRef.current;
-        if (!open || !panel || !anchor) return;
+        if (!open || !panel || !anchor || inPanel) return;
         const vw = document.documentElement.clientWidth;
         const r = panel.getBoundingClientRect();
         let shift = 0;
@@ -87,10 +92,11 @@ export function AmountRangeFilter({ value, onApply, maxima, previewCount, classN
         if (r.right + shift > vw - 8) shift = vw - 8 - r.right;
         if (r.left + shift < 8) shift = 8 - r.left;
         panel.style.marginLeft = shift ? `${shift}px` : '';
-    }, [open]);
+    }, [open, inPanel]);
 
+    // Not in the drawer: see Select.
     useEffect(() => {
-        if (!open) return;
+        if (!open || inPanel) return;
         const onDown = (e: MouseEvent) => {
             if (containerRef.current && !containerRef.current.contains(e.target as Node)) close();
         };
@@ -101,7 +107,7 @@ export function AmountRangeFilter({ value, onApply, maxima, previewCount, classN
             document.removeEventListener('mousedown', onDown);
             document.removeEventListener('keydown', onKey);
         };
-    }, [open, close]);
+    }, [open, inPanel, close]);
 
     // The count follows the draft, debounced. The answer remembers which draft
     // it was for: any other draft reads as "still counting", and a slower answer
@@ -210,7 +216,7 @@ export function AmountRangeFilter({ value, onApply, maxima, previewCount, classN
     const rightPct = (maxPos / SLIDER_STEPS) * 100;
 
     return (
-        <div ref={containerRef} className={cn('relative max-w-full', className)}>
+        <div ref={containerRef} className={cn('relative max-w-full', className, inPanel && 'w-full')}>
             <button
                 type="button"
                 aria-haspopup="dialog"
@@ -234,12 +240,14 @@ export function AmountRangeFilter({ value, onApply, maxima, previewCount, classN
                     ref={panelRef}
                     role="dialog"
                     aria-label="Filtrer par montant facturé"
-                    className="absolute z-50 top-full mt-1.5 left-0 w-[28rem] max-w-[calc(100vw-1rem)]
-                               bg-white rounded-lg border border-hairline shadow-xl menu-in"
+                    className={cn(
+                        'mt-1.5 scroll-mb-4 bg-white rounded-lg border border-hairline menu-in',
+                        !inPanel && 'absolute z-50 top-full left-0 w-[28rem] max-w-[calc(100vw-1rem)] shadow-xl',
+                    )}
                 >
                     <div className="px-5 pt-4 pb-3 border-b border-hairline">
-                        <p className="text-sm font-semibold text-ink">Montant facturé</p>
-                        <p className="text-xs text-ink-mute mt-0.5">
+                        {!inPanel && <p className="text-sm font-semibold text-ink mb-0.5">Montant facturé</p>}
+                        <p className="text-xs text-ink-mute">
                             Factures moins avoirs, sur la période choisie.
                         </p>
                     </div>

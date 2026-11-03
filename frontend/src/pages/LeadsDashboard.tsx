@@ -153,14 +153,14 @@ export default function LeadsDashboard() {
             </div>
 
             <FilterBar>
-                <FilterGroup label="Année">
+                <FilterGroup label="Année" pinned>
                     <Select
                         value={year === 'Toutes' ? 'Toutes' : String(year)}
                         onChange={v => setYear(v === 'Toutes' ? 'Toutes' : Number(v))}
                         options={yearOptions} variant="accent" className="w-40"
                     />
                 </FilterGroup>
-                <FilterGroup label="Mois">
+                <FilterGroup label="Mois" pinned>
                     <Select
                         value={String(selectedMonth)}
                         onChange={v => setSelectedMonth(v === 'Toutes' ? 'Toutes' : Number(v))}

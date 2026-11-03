@@ -7,7 +7,7 @@ import {
     Loader2, ExternalLink, Search, RefreshCw, X,
 } from 'lucide-react';
 import type {
-    ZohoAccountRow, ZohoAccountFilterOptions, LeadInvoiceRow, LeadInvoiceTotals,
+    ZohoAccountRow, ZohoAccountFilterOptions, LeadInvoiceRow,
     AccountDeptRevenueRow, AccountContactRow, AccountSpendMax,
 } from '../types/database';
 import { MONTHS } from '../lib/constants';
@@ -31,7 +31,7 @@ import { ChannelLogo } from '../components/advertising/ChannelLogo';
 import { ratingLabel, ratingOptions, ratingsInScope } from '../lib/accountRating';
 import { fetchAccountContacts, groupedLines, accountContactColumns } from '../components/accounts/accountContacts';
 import {
-    DEFAULT_SPEND_PERIOD, spendPeriod, spendPeriodShort, isSpendFilterActive,
+    DEFAULT_SPEND_PERIOD, amountChip, spendPeriod, spendPeriodShort, isSpendFilterActive,
     type SpendRange, type SpendPeriodKey,
 } from '../components/accounts/spendRange';
 import {
@@ -110,7 +110,6 @@ export default function AccountsDetail() {
     const [rows, setRows] = useState<ZohoAccountRow[]>([]);
     const [total, setTotal] = useState(0);
     const [loading, setLoading] = useState(true);
-    const [invoiceTotals, setInvoiceTotals] = useState<Record<string, LeadInvoiceTotals>>({});
     const [detailAccount, setDetailAccount] = useState<ZohoAccountRow | null>(null);
 
     // Interne and/or reps by name. See hooks/useRepFilter. NO_REPS rather than a
@@ -251,11 +250,16 @@ export default function AccountsDetail() {
      * can count a draft before it is applied.
      */
     const buildQuery = useCallback((mode: 'page' | 'export' | 'count', amount: SpendRange) => {
-        let query = supabase
-            .from('zoho_accounts_enriched')
-            .select('*', mode === 'count'
-                ? { count: 'exact', head: true }
-                : { count: mode === 'page' ? 'exact' : undefined });
+        const reading = mode === 'count'
+            ? { count: 'exact', head: true } as const
+            : { count: mode === 'page' ? 'exact' as const : undefined };
+        // Filtered on a service the same columns come back computed on that service's
+        // invoices alone, and only the accounts billed for it: what was billed for
+        // it, not the client's whole total. Everything below reads those columns, so
+        // the amounts, the amount filter, the Service column and the exports agree.
+        let query = selectedServices.length > 0
+            ? supabase.rpc('zoho_accounts_enriched_for', { p_departments: selectedServices }, reading)
+            : supabase.from('zoho_accounts_enriched').select('*', reading);
 
         // The amount billed over the chosen period. Zero at the bottom of the
         // range is "no minimum": it keeps the accounts that bought nothing.
@@ -279,8 +283,6 @@ export default function AccountsDetail() {
         // 977 accounts with no rating, silently hiding them.
         if (ratingScope !== 'Tous') query = query.eq('is_internal', false);
         if (ratings.length > 0) query = query.in('rating', ratings);
-        // What the account was billed for, never the CRM's Service field.
-        if (selectedServices.length > 0) query = query.overlaps('invoice_departments', selectedServices);
 
         const term = sanitizeSearch(debouncedSearch);
         if (term) {
@@ -321,18 +323,6 @@ export default function AccountsDetail() {
      */
     const requestId = useRef(0);
 
-    /** `id` is the request that asked for these rows; if a newer page has since
-     *  loaded, its invoice totals must not be replaced by this one's. */
-    const fetchInvoiceTotals = useCallback(async (pageRows: ZohoAccountRow[], id: number) => {
-        const ids = pageRows.map(r => r.zoho_account_id).filter(Boolean);
-        if (ids.length === 0) { setInvoiceTotals({}); return; }
-        const { data } = await cachedRpc('get_account_invoice_totals', { p_account_ids: ids });
-        if (!data || id !== requestId.current) return;
-        const byAccount: Record<string, LeadInvoiceTotals> = {};
-        for (const row of data as LeadInvoiceTotals[]) byAccount[row.account_id] = row;
-        setInvoiceTotals(byAccount);
-    }, []);
-
     const fetchData = useCallback(async () => {
         const id = ++requestId.current;
         setLoading(true);
@@ -355,14 +345,8 @@ export default function AccountsDetail() {
         const lastPage = Math.max(1, Math.ceil((count ?? 0) / PAGE_SIZE));
         if (page > lastPage) {
             setPage(lastPage);
-            return;
         }
-
-        // Deliberately after setLoading: the table is useful without the
-        // Factures column, so it renders on the first result rather than
-        // waiting on a second round trip.
-        fetchInvoiceTotals(pageRows, id);
-    }, [buildQuery, amountRange, page, fetchInvoiceTotals, setPage]);
+    }, [buildQuery, amountRange, page, setPage]);
 
     const fetchOptions = useCallback(async () => {
         const { data } = await cachedRpc<ZohoAccountFilterOptions>('get_zoho_account_filter_options', {
@@ -537,7 +521,7 @@ export default function AccountsDetail() {
             </div>
 
             <FilterBar>
-                <FilterGroup label="Recherche">
+                <FilterGroup label="Recherche" pinned>
                     <div className="relative">
                         <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-ink-mute" />
                         <input
@@ -553,14 +537,14 @@ export default function AccountsDetail() {
                         />
                     </div>
                 </FilterGroup>
-                <FilterGroup label="Année">
+                <FilterGroup label="Année" pinned>
                     <Select
                         value={year === 'Toutes' ? 'Toutes' : String(year)}
                         onChange={v => setYear(v === 'Toutes' ? 'Toutes' : Number(v))}
                         options={yearOptions} variant="accent" className="w-40"
                     />
                 </FilterGroup>
-                <FilterGroup label="Mois">
+                <FilterGroup label="Mois" pinned>
                     <Select
                         value={String(selectedMonth)}
                         onChange={v => setSelectedMonth(v === 'Toutes' ? 'Toutes' : Number(v))}
@@ -583,7 +567,7 @@ export default function AccountsDetail() {
                 <FilterGroup label="Région">
                     <MultiSelect values={selectedRegions} onChange={setSelectedRegions} options={optionList(options?.regions)} allLabel="Toutes les régions" className="w-44" />
                 </FilterGroup>
-                <FilterGroup label="Factures">
+                <FilterGroup label="Factures" resetTo="Tous">
                     <Select
                         value={selectedInvoiced} onChange={setSelectedInvoiced} className="w-44"
                         options={[
@@ -594,7 +578,7 @@ export default function AccountsDetail() {
                     />
                 </FilterGroup>
                 {spendMax && (
-                    <FilterGroup label="Montant facturé">
+                    <FilterGroup label="Montant facturé" chip={amountChip(amountRange, spendMax.today, setAmountRange)}>
                         <AmountRangeFilter
                             value={amountRange} onApply={setAmountRange}
                             maxima={spendMax} previewCount={countForAmount}
@@ -602,7 +586,7 @@ export default function AccountsDetail() {
                         />
                     </FilterGroup>
                 )}
-                <FilterGroup label="Statut">
+                <FilterGroup label="Statut" resetTo="Clients">
                     <Select
                         value={ratingScope} onChange={setRatingScope} className="w-52"
                         options={[
@@ -625,7 +609,10 @@ export default function AccountsDetail() {
                     rangeStart={rangeStart} rangeEnd={rangeEnd}
                     onChange={setPage} position="top"
                     noun="comptes" emptyLabel="Aucun compte"
-                    note={amountActive ? 'triés par montant facturé' : undefined}
+                    note={[
+                        amountActive && 'triés par montant facturé',
+                        selectedServices.length > 0 && `montants de ${selectedServices.join(', ')} seulement`,
+                    ].filter(Boolean).join(' · ') || undefined}
                 />
 
                 {loading ? (
@@ -665,7 +652,6 @@ export default function AccountsDetail() {
                             </thead>
                             <tbody className="divide-y divide-hairline">
                                 {rows.map(a => {
-                                    const totals = invoiceTotals[a.zoho_account_id];
                                     return (
                                         // The whole row opens the account, not just
                                         // the name: the name is a small target in a
@@ -715,26 +701,9 @@ export default function AccountsDetail() {
                                                 </span>
                                             </td>
                                             <td className="td text-ink-mute">{isBlankPick(a.domaine_activite) ? '—' : a.domaine_activite}</td>
-                                            {/* service_resolved, not service_interest:
-                                                59% of accounts never had the CRM field
-                                                filled in, and Shop Santé showed an empty
-                                                Service column while its invoices clearly
-                                                named two departments. Borrowed values are
-                                                greyed and marked, so an invoice department
-                                                is never passed off as a CRM answer. */}
+                                            {/* What was billed, never the CRM field. */}
                                             <td className="td">
-                                                <span className="inline-flex items-center gap-1">
-                                                    <TagCell
-                                                        values={a.service_resolved ?? []}
-                                                        muted={a.service_origin === 'invoice'}
-                                                    />
-                                                    {a.service_origin === 'invoice' && (
-                                                        <span
-                                                            className="text-ink-faint"
-                                                            title="Service déduit des départements facturés : le CRM n'en indique aucun"
-                                                        >*</span>
-                                                    )}
-                                                </span>
+                                                <TagCell values={a.invoice_departments ?? []} />
                                             </td>
                                             {periodAmount && (
                                                 <td className="td text-right whitespace-nowrap font-semibold text-ink tabular-nums" translate="no">
@@ -742,26 +711,26 @@ export default function AccountsDetail() {
                                                 </td>
                                             )}
                                             <td className="td text-right">
-                                                {totals ? (
+                                                {a.has_invoices ? (
                                                     // Amount on top, the document count under it: the
                                                     // amount is what the column is for, and "$3,400"
                                                     // over one invoice is a different client from
                                                     // "$3,400" over forty.
                                                     <span
                                                         className="inline-flex flex-col items-end leading-tight"
-                                                        title={`${totals.invoice_count} facture${totals.invoice_count > 1 ? 's' : ''}`
-                                                            + (totals.credit_count > 0
-                                                                ? `, ${totals.credit_count} avoir${totals.credit_count > 1 ? 's' : ''}`
+                                                        title={`${a.invoice_count} facture${a.invoice_count > 1 ? 's' : ''}`
+                                                            + (a.credit_count > 0
+                                                                ? `, ${a.credit_count} avoir${a.credit_count > 1 ? 's' : ''}`
                                                                 : '')}
                                                     >
                                                         <span className="font-semibold text-ink tabular-nums">
-                                                            {formatCurrencyCAD(totals.total_amount)}
+                                                            {formatCurrencyCAD(a.revenue_lifetime)}
                                                         </span>
                                                         <span className="text-2xs text-ink-mute tabular-nums" translate="no">
-                                                            {totals.invoice_count} facture{totals.invoice_count > 1 ? 's' : ''}
-                                                            {totals.credit_count > 0 && (
+                                                            {a.invoice_count} facture{a.invoice_count > 1 ? 's' : ''}
+                                                            {a.credit_count > 0 && (
                                                                 <span className="text-tone-critical">
-                                                                    {' '}· {totals.credit_count} avoir{totals.credit_count > 1 ? 's' : ''}
+                                                                    {' '}· {a.credit_count} avoir{a.credit_count > 1 ? 's' : ''}
                                                                 </span>
                                                             )}
                                                         </span>
@@ -835,7 +804,7 @@ const ACCOUNT_CSV: CsvColumn<ZohoAccountRow>[] = [
     { header: 'Source',             value: a => a.origine_du_client },
     { header: 'Liste rachetée',     value: a => a.is_bulk_import },
     { header: 'Domaine',            value: a => a.domaine_activite },
-    { header: 'Services',           value: a => (a.service_interest ?? []).join(' | ') },
+    { header: 'Services facturés',  value: a => (a.invoice_departments ?? []).join(' | ') },
     { header: 'Évaluation',         value: a => (a.rating ? ratingLabel(a.rating).full : null) },
     { header: 'Compte interne',     value: a => a.is_internal },
     { header: 'Compte parent',      value: a => a.parent_account_name },

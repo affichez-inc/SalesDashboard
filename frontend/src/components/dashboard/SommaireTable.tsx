@@ -174,7 +174,10 @@ export function SommaireTable({
                             </th>
                         </tr>
                     </thead>
-                    <tbody className="divide-y divide-hairline">
+                    {/* translate="no": Chrome Translate swaps these figures' text nodes for
+                        its own, and React then crashes the screen removing one when a
+                        filter changes the rows. */}
+                    <tbody className="divide-y divide-hairline" translate="no">
                         {sortedData.map((row) => {
                             const pct = row.pct_atteint;
                             const hasData = row.actual_amount > 0;
@@ -230,7 +233,7 @@ export function SommaireTable({
                             );
                         })}
                     </tbody>
-                    <tfoot>
+                    <tfoot translate="no">
                         <tr className="bg-ink text-white font-bold">
                             <td className="px-3 md:px-5 py-3 md:py-4 text-xs uppercase tracking-label sticky left-0 bg-ink z-10">Total</td>
                             <td className="px-3 md:px-5 py-3 md:py-4 text-right font-bold tabular-nums whitespace-nowrap">{formatCurrencyCAD(totalActual)}</td>

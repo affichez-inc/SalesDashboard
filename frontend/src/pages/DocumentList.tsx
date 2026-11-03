@@ -350,7 +350,7 @@ export default function DocumentList({ kind }: { kind: DocumentKind }) {
             </div>
 
             <FilterBar>
-                <FilterGroup label="Recherche">
+                <FilterGroup label="Recherche" pinned>
                     <div className="relative">
                         <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-ink-mute" />
                         <input
@@ -364,11 +364,11 @@ export default function DocumentList({ kind }: { kind: DocumentKind }) {
                         />
                     </div>
                 </FilterGroup>
-                <FilterGroup label="Année">
+                <FilterGroup label="Année" pinned>
                     <Select value={year === null ? ALL : String(year)} onChange={setYear}
                             options={yearOptions} variant="accent" className="w-40" />
                 </FilterGroup>
-                <FilterGroup label="Mois">
+                <FilterGroup label="Mois" pinned>
                     <Select value={month === null ? ALL : String(month)} onChange={setMonth}
                             options={MONTH_OPTIONS} disabled={year === null} className="w-40" />
                 </FilterGroup>
@@ -384,11 +384,11 @@ export default function DocumentList({ kind }: { kind: DocumentKind }) {
                     <MultiSelect values={depts} onChange={setDepts} options={DEPT_OPTIONS}
                                  allLabel="Tous les départements" className="w-52" />
                 </FilterGroup>
-                <FilterGroup label="Bureau">
+                <FilterGroup label="Bureau" resetTo="Tous">
                     <Select value={office ?? 'Tous'} onChange={setOffice} options={OFFICE_OPTIONS} className="w-40" />
                 </FilterGroup>
                 {kind === 'factures' && (
-                    <FilterGroup label="Livraison">
+                    <FilterGroup label="Livraison" resetTo="">
                         <Select value={withShipping ? '1' : ''} onChange={setShipping}
                                 options={SHIPPING_OPTIONS} className="w-44" />
                     </FilterGroup>

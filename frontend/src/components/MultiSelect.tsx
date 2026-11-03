@@ -1,12 +1,13 @@
 import { useState, useRef, useEffect, useLayoutEffect, useCallback, useMemo } from 'react';
 import { ChevronDown, Check, Search } from 'lucide-react';
 import { cn, foldForSearch } from '../lib/utils';
+import { useInFilterPanel, useRevealInPanel } from './FilterPanelContext';
 import type { SelectOption } from './Select';
 
 /** Same threshold as Select: from this many options the list grows a search box. */
 const SEARCHABLE_FROM = 4;
 
-interface MultiSelectProps {
+export interface MultiSelectProps {
     /** The selected values. An empty list means "no filter", shown as `allLabel`. */
     values: string[];
     onChange: (values: string[]) => void;
@@ -61,6 +62,9 @@ export function MultiSelect({
 
     const close = useCallback(() => { setOpen(false); setQuery(''); }, []);
 
+    const inPanel = useInFilterPanel();
+    useRevealInPanel(open, menuRef);
+
     // The menu is as wide as its longest label, which can be wider than the
     // trigger. In the right-hand column of a narrow screen that would run past
     // the edge and scroll the page sideways, so it hangs from the trigger's
@@ -68,16 +72,16 @@ export function MultiSelect({
     // menu is unmounted on close, so the next opening starts from the left again.
     useLayoutEffect(() => {
         const menu = menuRef.current;
-        if (!open || !menu) return;
+        if (!open || !menu || inPanel) return;
         if (menu.getBoundingClientRect().right > document.documentElement.clientWidth - 8) {
             menu.style.left = 'auto';
             menu.style.right = '0';
         }
-    }, [open]);
+    }, [open, inPanel]);
 
-    // Close on outside click
+    // Close on outside click. Not in the drawer: see Select.
     useEffect(() => {
-        if (!open) return;
+        if (!open || inPanel) return;
         const handler = (e: MouseEvent) => {
             if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
                 close();
@@ -85,15 +89,15 @@ export function MultiSelect({
         };
         document.addEventListener('mousedown', handler);
         return () => document.removeEventListener('mousedown', handler);
-    }, [open, close]);
+    }, [open, inPanel, close]);
 
     // Keyboard: Escape to close
     useEffect(() => {
-        if (!open) return;
+        if (!open || inPanel) return;
         const handler = (e: KeyboardEvent) => { if (e.key === 'Escape') close(); };
         document.addEventListener('keydown', handler);
         return () => document.removeEventListener('keydown', handler);
-    }, [open, close]);
+    }, [open, inPanel, close]);
 
     useEffect(() => {
         if (open && showSearch) {
@@ -117,7 +121,7 @@ export function MultiSelect({
     const active = values.length > 0;
 
     return (
-        <div ref={containerRef} className={cn("relative max-w-full", className)}>
+        <div ref={containerRef} className={cn("relative max-w-full", className, inPanel && "w-full")}>
             {/* Trigger */}
             <button
                 type="button"
@@ -159,8 +163,8 @@ export function MultiSelect({
             {/* Dropdown */}
             {open && (
                 <div ref={menuRef} className={cn(
-                    "absolute z-50 top-full mt-1.5 left-0 min-w-full max-w-[calc(100vw-1rem)] bg-white rounded-lg border border-hairline shadow-xl overflow-hidden",
-                    "menu-in"
+                    "mt-1.5 bg-white rounded-lg border border-hairline overflow-hidden menu-in",
+                    !inPanel && "absolute z-50 top-full left-0 min-w-full max-w-[calc(100vw-1rem)] shadow-xl"
                 )}>
                     {showSearch && (
                         <div className="relative border-b border-hairline p-2">

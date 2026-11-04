@@ -40,7 +40,11 @@ jobs:
 
       - uses: supabase/setup-cli@v1
         with:
-          version: latest
+          # Pinned (2026-11-04): "latest" became the CLI's v3, which refuses the [inbucket] section of
+          # supabase/config.toml ("no longer supported. Use [local_smtp] instead") and failed every deploy
+          # since, before touching anything. 2.116.0 is the version the deploys were made with locally.
+          # Moving to v3 means renaming that section and checking the local CLIs first.
+          version: 2.116.0
 
       - name: Link project
         run: supabase link --project-ref "$PROJECT_REF"

@@ -945,6 +945,30 @@ full price.
 - **`guide.ts` is what Claude believes about the data.** When a sync or an RPC changes what a table
   holds, change the guide in the same release.
 
+### The LeadFlow Feed: LeadFlow reads our sales (read only)
+
+`supabase/functions/leadflow-feed` serves our quotes (`sales`), invoices and credit notes (`invoices`) and Books
+customers (`zoho_books_customers`) to LeadFlow as its canonical records, through LeadFlow's Feed contract v1:
+`GET /v1/feed`, `/v1/records`, `/v1/ids`, bearer key `LEADFLOW_FEED_KEY` (a function secret, compared in
+constant time), service role with explicit columns, GET only. The mapping is `records.ts` (tested by
+`records.test.ts`); the keyset indexes and `invoices.updated_at` (a trigger, so a paid invoice is re-read without
+a full pass) are migration `20261104230000_leadflow_feed.sql`. The calls, the limits and the setup are in
+`docs/LEADFLOW-FEED.md` (the `docs/` folder is gitignored here: it lives on the machine, not in the repo).
+
+Setup, once: generate a long random key and set it as the function secret `LEADFLOW_FEED_KEY` on this project;
+merge (the deploy workflow applies the migration and deploys the function); check
+`curl -H "Authorization: Bearer <key>" https://auyfucbskylougsmmrks.supabase.co/functions/v1/leadflow-feed/v1/feed`;
+then in LeadFlow, on the `affichez` client, add the connection "Flux de ventes (LeadFlow Feed)" with that address
+and the key. Rotate: a new secret, then Reconnect in LeadFlow.
+
+Two rules follow from it:
+- **A column the feed reads is part of a contract.** Renaming or dropping `sales.amount`, `status`, `quote_number`,
+  `accepted_date`, `department`, `office`, `books_customer_id`, `updated_at`, or the same on `invoices`
+  (`is_avoir`, `invoice_number`, `invoice_date`), or `zoho_books_customers.crm_account_id` / `crm_contact_id` /
+  `link_status`, changes what LeadFlow's dashboard shows. Change `records.ts` and its test in the same PR.
+- **Nothing else goes through it.** A new kind (payments, deals) is a new mapper in `records.ts` and a new
+  entry in `descriptor()`, never a wider `select`.
+
 ### Leads: which table is which
 
 There are two lead tables, and picking the wrong one is the easiest mistake to

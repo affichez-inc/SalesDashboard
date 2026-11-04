@@ -448,3 +448,7 @@ s3_region = "env(S3_REGION)"
 s3_access_key = "env(S3_ACCESS_KEY)"
 # Configures AWS_SECRET_ACCESS_KEY for S3 bucket
 s3_secret_key = "env(S3_SECRET_KEY)"
+
+# The LeadFlow Feed (docs/LEADFLOW-FEED.md): LeadFlow's sync worker reads with the feed's own key, not a user JWT.
+[functions.leadflow-feed]
+verify_jwt = false

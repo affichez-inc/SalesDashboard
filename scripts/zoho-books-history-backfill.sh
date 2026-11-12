@@ -6,13 +6,16 @@
 #   bash scripts/zoho-books-history-backfill.sh invoices          # invoices only
 #   bash scripts/zoho-books-history-backfill.sh invoices 2018     # invoices from 2018 on
 #   bash scripts/zoho-books-history-backfill.sh invoices 2014 2014  # one year only
+#   bash scripts/zoho-books-history-backfill.sh invoices 2014 2024 all  # QC and MTL
 #   bash scripts/zoho-books-history-backfill.sh quotes            # quotes only
 #
 # When to run it: once, after zoho-sync is deployed without the 2025 cutoff on
 # non-won quotes. The scheduled syncs are incremental on last_modified_time, so a
 # document nobody edits is never read again and the past never arrives by itself.
 #
-# Invoices: one calendar year per call, QC only (MTL has nothing before 2021).
+# Invoices: one calendar year per call, QC only by default (MTL has nothing
+# before 2021); a fourth argument "all" walks both offices, which a column added
+# to the invoice rows needs (last_payment_date, 2026-11-13: run 2014 2024 all).
 # QC's first invoice is dated 2014-04-04; Books holds nothing older.
 # Quotes: Books' estimates list has no date filter, so the walk covers the whole
 # history in slices of about two minutes and reports walk_complete when done.
@@ -33,19 +36,21 @@ LAST_YEAR=2020
 MAX_SLICES=40
 
 MODE="${1:-all}"
-case "$MODE" in all|invoices|quotes) ;; *) echo "usage: $0 [all|invoices [FROM [TO]]|quotes]"; exit 1 ;; esac
+case "$MODE" in all|invoices|quotes) ;; *) echo "usage: $0 [all|invoices [FROM [TO [all]]]|quotes]"; exit 1 ;; esac
 [ "$MODE" = "invoices" ] && [ -n "${2:-}" ] && FIRST_YEAR="$2"
 [ "$MODE" = "invoices" ] && [ -n "${3:-}" ] && LAST_YEAR="$3"
+ORG_HEADER=(-H "x-org: QC"); ORG_LABEL="QC"
+[ "$MODE" = "invoices" ] && [ "${4:-}" = "all" ] && { ORG_HEADER=(); ORG_LABEL="QC+MTL"; }
 
 stamp() { date -u +"%Y-%m-%d %H:%M:%SZ"; }
 
 # ── Invoices and credit notes ────────────────────────────────────────────────
 if [ "$MODE" != "quotes" ]; then
   for (( y = FIRST_YEAR; y <= LAST_YEAR; y++ )); do
-    echo "== $(stamp) invoices QC $y"
+    echo "== $(stamp) invoices $ORG_LABEL $y"
     # x-prune: false skips the whole-table duplicate sweep a full sync otherwise runs.
     resp="$(curl -s -m 175 -X POST -H "Authorization: Bearer $ANON" \
-      -H "x-sync-source: manual" -H "x-full-sync: true" -H "x-org: QC" -H "x-prune: false" \
+      -H "x-sync-source: manual" -H "x-full-sync: true" "${ORG_HEADER[@]}" -H "x-prune: false" \
       -H "x-date-start: $y-01-01" -H "x-date-end: $y-12-31" "$FN/zoho-invoice-sync")"
     echo "$resp" | head -c 600; echo
     # A reply with no "upserted" key is an error object: stop rather than skip a year.
@@ -54,7 +59,7 @@ if [ "$MODE" != "quotes" ]; then
     fi
     if ! grep -q -E '"errors": ?\[\]' <<<"$resp"; then
       echo "STOP: $y finished with errors (see above). Fix them and run again from $y:"
-      echo "  bash scripts/zoho-books-history-backfill.sh invoices $y"; exit 3
+      echo "  bash scripts/zoho-books-history-backfill.sh invoices $y $LAST_YEAR ${4:-}"; exit 3
     fi
   done
   echo "== $(stamp) invoices done"

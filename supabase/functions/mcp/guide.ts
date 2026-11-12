@@ -31,7 +31,7 @@ Affichez is an advertising company in Quebec with two offices, QC and MTL. This 
 - Zoho Books invoices and credit notes: QC since 2014, MTL since 2021. Drafts are not stored; voided and deleted documents are removed.
 - status: sent, viewed, paid, partial, overdue, or avoir for a credit note. Credit notes have is_avoir = true and a NEGATIVE amount.
 - Net billed = SUM(amount) over invoices and credit notes together; that is the dashboard's invoice total. A count of invoices excludes credit notes (WHERE NOT is_avoir).
-- Dated by invoice_date. Due dates are not stored.
+- Dated by invoice_date. Due dates are not stored. last_payment_date is the day of the latest payment: on a paid invoice, the day it was settled; NULL when nothing was paid, and on an invoice settled only by a credit note.
 
 ## Amounts, on both tables
 - amount is before tax: Zoho's total minus Zoho's tax, shipping and fees included. Commissions are paid on it. total_incl_tax includes the taxes. Use amount for revenue.
@@ -55,6 +55,7 @@ Affichez is an advertising company in Quebec with two offices, QC and MTL. This 
 ## Leads and contacts: table zoho_leads
 - stage 'lead' or 'contact'. Most contacts were created directly as clients and never were leads: a lead funnel counts stage = 'lead' only.
 - Zoho flags almost every lead converted, which says little. A useful conversion is a lead whose account was invoiced after the lead arrived.
+- Delays from a lead to the account's first won quote and to the payment of the first invoice after it: get_zoho_sales_cycle (page Comptes), over the leads received in the period.
 - The table leads is a dead hand-entered archive; do not use it, nor the get_leads_* functions that read it.
 
 ## Other tables

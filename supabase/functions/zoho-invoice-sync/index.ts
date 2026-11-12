@@ -316,8 +316,15 @@ function invoiceRow(inv: Record<string, unknown>, office: string): Record<string
     office,
     invoice_date: inv.date,
     status: mappedStatus,
+    last_payment_date: paymentDate(inv),
     is_avoir: false,
   };
+}
+
+/** Books' last_payment_date, on the list and detail payloads alike; '' when nothing was paid. */
+function paymentDate(doc: Record<string, unknown>): string | null {
+  const v = String(doc.last_payment_date ?? '');
+  return /^\d{4}-\d{2}-\d{2}$/.test(v) ? v : null;
 }
 
 async function syncInvoices(
@@ -518,6 +525,9 @@ async function creditNoteRows(
       office,
       invoice_date: note.date,
       status: 'avoir',
+      // Not a payment. Present so a batch mixing notes and invoices (the
+      // reconcile writes both) has the same keys on every row, as PostgREST requires.
+      last_payment_date: null,
       is_avoir: true,
     });
   }
@@ -613,13 +623,14 @@ interface StoredRow {
   total_incl_tax: string | number | null;
   rep_name: string | null;
   invoice_date: string | null;
+  last_payment_date: string | null;
 }
 
 async function storedRowsSince(office: string, since: string): Promise<StoredRow[]> {
   const rows: StoredRow[] = [];
   for (let offset = 0; ; offset += 1000) {
     const res = await fetch(
-      `${SUPABASE_URL}/rest/v1/invoices?select=zoho_id,is_avoir,status,total_incl_tax,rep_name,invoice_date` +
+      `${SUPABASE_URL}/rest/v1/invoices?select=zoho_id,is_avoir,status,total_incl_tax,rep_name,invoice_date,last_payment_date` +
         `&office=eq.${office}&invoice_date=gte.${since}&order=zoho_id.asc&limit=1000&offset=${offset}`,
       { headers: SB_HEADERS },
     );
@@ -708,7 +719,10 @@ async function reconcileWindow(
     const moved = !row || row.status !== status || (storedTotal !== null && storedTotal !== total) ||
       (row.rep_name ?? '') !== (String(doc.salesperson_name ?? '').trim()) ||
       row.invoice_date !== doc.date;
-    if (!moved && storedTotal !== null) continue;
+    // A payment date the row lacks is rewritten from the list alone, like a
+    // missing total: the detail read would add nothing to it.
+    const paymentMoved = !avoir && (row?.last_payment_date ?? null) !== paymentDate(doc);
+    if (!moved && storedTotal !== null && !paymentMoved) continue;
     if (moved) changes.detail.push({ id, avoir });
     (avoir ? noteDocs : invoiceDocs).push(doc);
   }
@@ -764,11 +778,11 @@ const OVERDUE_CHECK_EVERY_MS = 60 * 60 * 1000;
 /** Detail reads per org and pass; the rest wait for the next pass. */
 const OVERDUE_RECHECK_MAX = 25;
 
-async function setInvoiceStatus(zohoId: string, status: string): Promise<void> {
+async function setInvoiceStatus(zohoId: string, status: string, lastPaymentDate: string | null): Promise<void> {
   const res = await fetch(`${SUPABASE_URL}/rest/v1/invoices?zoho_id=eq.${encodeURIComponent(zohoId)}`, {
     method: 'PATCH',
     headers: SB_HEADERS,
-    body: JSON.stringify({ status }),
+    body: JSON.stringify({ status, last_payment_date: lastPaymentDate }),
   });
   if (!res.ok) throw new Error('Supabase status update failed: ' + await res.text());
 }
@@ -823,7 +837,8 @@ async function reconcileOverdue(
   const marked = [...listedIds].filter((id) => !stored.has(id)).length;
 
   // The detail payload lacks fields the list carries (created_by), so only the
-  // status is written back. A record Books no longer has is left to the reaper.
+  // status and payment date are written back. A record Books no longer has is
+  // left to the reaper.
   let cleared = 0;
   const stale = [...stored].filter((id) => !listedIds.has(id));
   for (const id of stale.slice(0, OVERDUE_RECHECK_MAX)) {
@@ -843,7 +858,7 @@ async function reconcileOverdue(
       errors.push(`${org.office} overdue recheck ${id}: Books status "${inv.status}" left as is`);
       continue;
     }
-    await setInvoiceStatus(id, status);
+    await setInvoiceStatus(id, status, paymentDate(inv));
     cleared++;
   }
   if (stale.length > OVERDUE_RECHECK_MAX) {

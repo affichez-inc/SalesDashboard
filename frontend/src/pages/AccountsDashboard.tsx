@@ -5,9 +5,10 @@ import { cachedRpc, invalidateRpcCache } from '../lib/rpcCache';
 import { Loader2, Building2, Percent, DollarSign, Timer, Search } from 'lucide-react';
 import type {
     ZohoAccountKPIs, ZohoAccountBreakdownRow, ZohoAccountFilterOptions,
-    ZohoAccountMonthlyRow, AccountSpendMax,
+    ZohoAccountMonthlyRow, AccountSpendMax, ZohoSalesCycle,
 } from '../types/database';
 import { MonthlyEvolution } from '../components/accounts/MonthlyEvolution';
+import { SalesCycle } from '../components/accounts/SalesCycle';
 import { AmountRangeFilter } from '../components/accounts/AmountRangeFilter';
 import {
     DEFAULT_SPEND_PERIOD, amountChip, isSpendFilterActive, spendPeriod, spendRangeArgs,
@@ -126,6 +127,7 @@ export default function AccountsDashboard() {
     const [byDomaine, setByDomaine] = useState<ZohoAccountBreakdownRow[]>([]);
     const [monthly, setMonthly] = useState<ZohoAccountMonthlyRow[]>([]);
     const [monthlyPrev, setMonthlyPrev] = useState<ZohoAccountMonthlyRow[]>([]);
+    const [salesCycle, setSalesCycle] = useState<ZohoSalesCycle | null>(null);
     const [options, setOptions] = useState<ZohoAccountFilterOptions | null>(null);
 
     // Interne and/or reps by name. See hooks/useRepFilter.
@@ -225,6 +227,7 @@ export default function AccountsDashboard() {
             { data: domData },
             { data: monData },
             { data: monPrevData },
+            { data: cycleData },
         ] = await Promise.all([
             cachedRpc('get_zoho_account_kpis',       { ...shared, p_rep: rep, p_reps: reps, p_sources: sources, p_services: services, p_domaines: domaines }),
             // by_rep keeps p_reps (so a group narrows the list to its members)
@@ -242,6 +245,17 @@ export default function AccountsDashboard() {
                 ...monthlyArgs,
                 p_year: yearParamValue === null ? null : yearParamValue - 1,
             }),
+            // Leads received in the period, through the same account filters.
+            // An error (a database without the function) hides the block.
+            cachedRpc('get_zoho_sales_cycle', {
+                p_year: shared.p_year, p_month: shared.p_month,
+                p_window_months: shared.p_window_months, p_exclude_ratings: shared.p_exclude_ratings,
+                p_regions: shared.p_regions,
+                ...(ratings.length > 0 ? { p_ratings: ratings } : {}),
+                ...accountFilterArgs,
+                ...spendRangeArgs(amountRange),
+                p_rep: rep, p_reps: reps, p_sources: sources, p_services: services, p_domaines: domaines,
+            }),
         ]);
 
         setKpis((kpiData as ZohoAccountKPIs[])?.[0] ?? null);
@@ -251,6 +265,7 @@ export default function AccountsDashboard() {
         setByDomaine((domData as ZohoAccountBreakdownRow[]) ?? []);
         setMonthly((monData as ZohoAccountMonthlyRow[]) ?? []);
         setMonthlyPrev((monPrevData as ZohoAccountMonthlyRow[]) ?? []);
+        setSalesCycle((cycleData as ZohoSalesCycle[] | null)?.[0] ?? null);
         setLoading(false);
     }, [yearParamValue, selectedMonth, repFilter, selectedSources, selectedServices,
         selectedDomaines, selectedRegions, windowMonths, excludeRatings, ratings,
@@ -359,6 +374,13 @@ export default function AccountsDashboard() {
     const windowLabel = windowParam === 'Toute'
         ? 'tout l’historique'
         : `${windowParam} mois suivant la création du compte`;
+
+    const monthName = selectedMonth === 'Toutes'
+        ? null
+        : MONTHS.find(m => m.value === selectedMonth)?.label.toLowerCase() ?? null;
+    const periodLabel = year === 'Toutes'
+        ? (monthName ? `en ${monthName}, toutes années` : 'depuis le début')
+        : (monthName ? `en ${monthName} ${year}` : `en ${year}`);
 
     return (
         <div className="p-4 md:p-8 max-w-screen-2xl mx-auto space-y-6 md:space-y-8">
@@ -509,6 +531,10 @@ export default function AccountsDashboard() {
                         2,028 accounts show almost no revenue here. It is documented
                         in docs/COMPTES.md §8a, and the source table still marks the
                         cohort with a dot and explains it on hover. */}
+
+                    {salesCycle && (
+                        <SalesCycle data={salesCycle} periodLabel={periodLabel} windowMonths={windowMonths} />
+                    )}
 
                     <MonthlyEvolution
                         current={monthly} previous={monthlyPrev}

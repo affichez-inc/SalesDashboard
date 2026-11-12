@@ -435,6 +435,15 @@ RPC filters on status.
 Statuses were audited at the same time and were right: all 4,412 documents of
 2026 matched Zoho. A payment does reach the 5-minute incremental sync.
 
+**`invoices.last_payment_date` is Books' own field**, on the list payload (checked
+2026-11-12), so every path that writes an invoice row writes it, and the overdue
+recheck copies it from the detail payload with the status. The hourly reconcile
+rewrites a row whose date disagrees from the list alone, with no detail read, which
+fills every row dated since January of last year; older rows got it from one walk
+(`scripts/zoho-books-history-backfill.sh invoices 2014 2024 all`). It is NULL on an
+invoice settled only by a credit note (18 of 2,883 paid invoices in the detail
+cache on 2026-11-12), so "paid" and "has a payment date" are not the same set.
+
 **Quotes have the same blind spot, on the open ones.** A draft or sent quote
 deleted in Books, or one passing its expiry date (which, like an invoice turning
 overdue, does not move `last_modified_time`), stayed draft or sent here. So
@@ -670,6 +679,19 @@ Three things about the Comptes module that are not obvious:
   `src/lib/accountRating.ts` maps one to the other for the dropdown, the detail
   column and the CSV. It copies the fr_FR Translations export of 2026-09-29 and
   nothing syncs it: a French label renamed in Zoho has to be renamed there too.
+- **"Du lead au paiement" counts leads, not accounts** (`get_zoho_sales_cycle`,
+  `20261113120000_sales_cycle_delays.sql`). Its cohort is the leads received in the period
+  (`stage = 'lead'`, converted, their account matching the page's other filters), so its count
+  is not "Comptes créés" and the block says which it is. Per lead: the account's first won quote
+  accepted on or after the lead's day, within the revenue window (`sale_date`); then the first
+  invoice issued on or after that acceptance, and the day it was paid in full
+  (`last_payment_date` on a `paid` row). Not the first invoice paid: an unpaid first invoice is
+  the delay. Medians and averages are over the leads that reached each step, and the total is
+  taken lead by lead, so it is not the sum of the two medians. Filtered on a service, only that
+  department's quotes and invoices count. A paid first invoice with no payment date is counted
+  apart (`leads_paid_undated`) and shown, never read as unpaid. The function is SECURITY DEFINER
+  behind `app_require_section('comptes')`: Comptes does not read `sales`, and it returns counts
+  and days only.
 
 **Royer & Fils / VotreLogo.ca is a different company's revenue.** Measured
 2026-09-07: `SUM(Ventes_totales_2022_2026)` is $5,530,878.34 across all 20,645
@@ -1051,7 +1073,7 @@ the table would just be overwritten by the next sync.
 
 | Route | Page | Purpose |
 |---|---|---|
-| `/comptes` | `AccountsDashboard` | Comptes section. Account cohorts by source/rep/service/domaine, monthly evolution vs last year, revenue attribution window |
+| `/comptes` | `AccountsDashboard` | Comptes section. Account cohorts by source/rep/service/domaine, monthly evolution vs last year, revenue attribution window, delays from lead to won quote to paid invoice |
 | `/createurs` | `Createurs` | **Documents créés** in the nav. Admin-only. Who *created* each quote/invoice, vs who sold it — a rep who builds a quote and hands it to another still gets the credit here. Never reconciles with rep figures, by design |
 | `/comptes/detail` | `AccountsDetail` | Comptes section. Searchable client directory; a row opens its billing history by department and year |
 | `/publicite` | `Advertising` | Publicité section, **Factures** screen. Google Ads + Meta spend against the invoices of the accounts tagged to each, in three views (payant, organique, Google inconnu). Channel-level and monthly, never per lead |

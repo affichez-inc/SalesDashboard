@@ -601,6 +601,28 @@ export type ZohoAccountKPIs = {
     ventes_royer: number;
 };
 
+/**
+ * get_zoho_sales_cycle: the leads received in the period, followed to the first
+ * won quote of their account, then to the payment of the first invoice after it.
+ * Delays are in days, over the leads that reached the step.
+ */
+export type ZohoSalesCycle = {
+    leads_received: number;
+    leads_won: number;
+    leads_invoiced: number;
+    leads_paid: number;
+    /** First invoice paid, but its payment date is not in the mirror yet. */
+    leads_paid_undated: number;
+    median_days_to_won: number | null;
+    avg_days_to_won: number | null;
+    median_days_won_to_paid: number | null;
+    avg_days_won_to_paid: number | null;
+    median_days_to_paid: number | null;
+    avg_days_to_paid: number | null;
+    /** The day the last lead of the period leaves the window; NULL without one. */
+    window_ends_on: string | null;
+};
+
 /** One row of any get_zoho_accounts_by_* breakdown - rep, source, service, domaine. */
 export type ZohoAccountBreakdownRow = {
     label: string;

@@ -961,7 +961,10 @@ function UsersManager({ setMessage }: { setMessage: (m: { type: 'success' | 'err
                                             })}
                                         </div>
                                     )}
-                                    <p className={cn('text-2xs',
+                                    {/* Keyed so each mode gets a new element: Chrome Translate
+                                        otherwise keeps showing the other mode's text. */}
+                                    <p key={all ? 'all' : 'modules'}
+                                       className={cn('text-2xs',
                                                      all
                                                          ? 'bg-tone-warn-soft border border-tone-warn/40 rounded-md px-3 py-2 text-tone-warn-ink'
                                                          : 'text-ink-mute')}>
@@ -976,7 +979,9 @@ function UsersManager({ setMessage }: { setMessage: (m: { type: 'success' | 'err
                     <div className="flex items-center gap-3">
                         <button onClick={handleSave} disabled={saving || !form.email.trim()}
                             className="btn btn-md btn-primary">
-                            {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />} Enregistrer
+                            {/* The label in its own element: Chrome Translate swaps a bare text
+                                node, and React then cannot insert the spinner before it. */}
+                            {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />} <span>Enregistrer</span>
                         </button>
                         <button onClick={() => setShowForm(false)} className="btn btn-md btn-ghost text-ink-mute">Annuler</button>
                     </div>
@@ -1069,7 +1074,7 @@ function SectionChips({ user }: { user: AllowedUser }) {
             {claude && (claude.length === 0
                 ? <span className={cn(chip, 'bg-tone-warn-soft text-tone-warn-ink')}>Claude · aucun module</span>
                 : <span className={cn(chip, 'bg-white text-ink ring-1 ring-inset ring-ink')}>
-                      Claude · {claude.map(k => SECTIONS.find(s => s.key === k)!.label).join(', ')}
+                      {`Claude · ${claude.map(k => SECTIONS.find(s => s.key === k)!.label).join(', ')}`}
                   </span>)}
         </div>
     );

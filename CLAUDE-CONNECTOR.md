@@ -9,7 +9,7 @@
    Click **Continue**.
 4. On the next screen:
    - **Authentication:** leave **Sign in now** selected.
-   - **OAuth client:** select **Use your own OAuth client** (Claude pre-selects another option).
+   - **OAuth client:** leave **Use your own OAuth client** selected.
    - **OAuth client ID:** paste `a6a9a886-5f8c-4ded-b14a-43d953759c56`
    - **OAuth client secret:** leave empty.
 

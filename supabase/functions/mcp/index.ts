@@ -16,6 +16,9 @@
 // at once. The reverse holds too: app_session_trusted() refuses a token that
 // carries a client_id, so this token opens nothing in the app.
 //
+// What the user's Claude reads is checked on every request too: all data, or
+// only the sections ticked for it in Paramètres → Utilisateurs (db.ts).
+//
 // verify_jwt is off for this function (config.toml): the gateway's own 401
 // carries no WWW-Authenticate header, and without it Claude cannot discover
 // where to sign in.
@@ -23,8 +26,8 @@
 import { createClient } from 'jsr:@supabase/supabase-js@2';
 import { createMcpHandler, McpServer } from 'npm:@modelcontextprotocol/server@2.3.1';
 import { z } from 'npm:zod@4.6.0';
-import { type Access, claudeAccess, describeSchema, runQuery } from './db.ts';
-import { GUIDE, INSTRUCTIONS } from './guide.ts';
+import { type Caller, claudeGrant, describeSchema, type Grant, runQuery, scopedAvailable } from './db.ts';
+import { accessNote, GUIDE, instructionsFor } from './guide.ts';
 
 const SUPABASE_URL    = Deno.env.get('SUPABASE_URL')!;
 const OAUTH_CLIENT_ID = Deno.env.get('MCP_OAUTH_CLIENT_ID')!;
@@ -71,8 +74,15 @@ function forbidden(message: string): Response {
   );
 }
 
-/** The caller's address, or the response that refuses them. */
-async function authenticate(req: Request): Promise<string | Response> {
+function unavailable(message: string): Response {
+  return Response.json(
+    { jsonrpc: '2.0', id: null, error: { code: -32603, message } },
+    { status: 503 },
+  );
+}
+
+/** Who the caller reads as, or the response that refuses them. */
+async function authenticate(req: Request): Promise<Caller | Response> {
   const match = /^Bearer\s+(\S+)$/i.exec(req.headers.get('Authorization') ?? '');
   if (!match) return challenge();
 
@@ -103,38 +113,50 @@ async function authenticate(req: Request): Promise<string | Response> {
 
   // A connector token's amr is always the OAuth code exchange, whatever session
   // gave the consent, so it cannot tell a Zoho sign-in from a password one. The
-  // account having no password can: see mcp_claude_access().
-  let access: Access;
+  // account having no password can: see mcp_claude_grant().
+  let grant: Grant;
   try {
-    access = await claudeAccess(userId);
+    grant = await claudeGrant(userId);
   } catch (err) {
     console.error('mcp: access lookup failed:', err);
-    return Response.json(
-      { jsonrpc: '2.0', id: null, error: { code: -32603, message: 'Database unavailable, try again.' } },
-      { status: 503 },
-    );
+    return unavailable('Database unavailable, try again.');
   }
-  if (access === 'unknown') return challenge('invalid_token', 'The user of this token no longer exists.');
-  if (access === 'not_enabled') {
+  if (grant.verdict === 'unknown') return challenge('invalid_token', 'The user of this token no longer exists.');
+  if (grant.verdict === 'not_enabled') {
     return forbidden(`Claude n'est pas activé pour ${email}. Demandez à un administrateur.`);
   }
-  if (access === 'has_password') {
+  if (grant.verdict === 'has_password') {
     return forbidden(
       `Le compte ${email} a un mot de passe Supabase. Claude n'est permis qu'aux comptes sans mot de passe, ` +
       'qui ne s’ouvrent que par la connexion Zoho. Demandez à un administrateur.',
     );
   }
-  return email;
+  if (grant.verdict !== 'ok') return unavailable('Unexpected access verdict.');
+  if (grant.sections === null) return { email, scope: 'all' };
+
+  if (grant.sections.length === 0) {
+    return forbidden(
+      `Aucune section n'est ouverte à Claude pour ${email} : celles cochées pour Claude ne sont pas ouvertes ` +
+      'à ce compte dans l’app. Demandez à un administrateur.',
+    );
+  }
+  if (!scopedAvailable) {
+    console.error('mcp: MCP_SCOPED_DB_URL is not set, a user limited to sections cannot be served');
+    return unavailable('Claude limité à des sections n’est pas encore configuré sur le serveur.');
+  }
+  return { email, scope: 'sections', userId, sections: grant.sections };
 }
 
 function text(value: string) {
   return { content: [{ type: 'text' as const, text: value }] };
 }
 
-function buildServer(email: string): McpServer {
+function buildServer(caller: Caller): McpServer {
+  const { email } = caller;
+  const scope = caller.scope === 'all' ? 'all' : caller.sections.join(',');
   const server = new McpServer(
     { name: 'affichez-ventes', version: '1.0.0' },
-    { instructions: INSTRUCTIONS },
+    { instructions: instructionsFor(email, caller.scope === 'all' ? null : caller.sections) },
   );
 
   server.registerTool(
@@ -148,7 +170,10 @@ function buildServer(email: string): McpServer {
       inputSchema: z.object({}),
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
-    async () => text(`${GUIDE}\n${await describeSchema()}`),
+    async () => {
+      const { who, schema } = await describeSchema(caller);
+      return text(`${who ? accessNote(who) : ''}${GUIDE}\n${schema}`);
+    },
   );
 
   server.registerTool(
@@ -171,21 +196,21 @@ function buildServer(email: string): McpServer {
     async ({ sql, max_rows }) => {
       const started = Date.now();
       try {
-        const result = await runQuery(sql, max_rows);
+        const result = await runQuery(caller, sql, max_rows);
         let shown = result.rows.length;
         let out = JSON.stringify({ ...result, row_count: shown });
         while (out.length > MAX_RESULT_CHARS && shown > 0) {
           shown = Math.floor(shown / 2);
           out = JSON.stringify({ ...result, rows: result.rows.slice(0, shown), row_count: shown, truncated: true });
         }
-        console.log(JSON.stringify({ email, ms: Date.now() - started, rows: shown, truncated: shown < result.rows.length || result.truncated, sql: sql.slice(0, 500) }));
+        console.log(JSON.stringify({ email, scope, ms: Date.now() - started, rows: shown, truncated: shown < result.rows.length || result.truncated, sql: sql.slice(0, 500) }));
         if (shown < result.rows.length || result.truncated) {
           out += '\nThe result was cut short. Aggregate in SQL, select fewer columns, or add a LIMIT.';
         }
         return text(out);
       } catch (err) {
         const e = err as { message?: string; hint?: string; detail?: string };
-        console.log(JSON.stringify({ email, ms: Date.now() - started, error: e.message, sql: sql.slice(0, 500) }));
+        console.log(JSON.stringify({ email, scope, ms: Date.now() - started, error: e.message, sql: sql.slice(0, 500) }));
         const parts = [`Query failed: ${e.message ?? String(err)}`];
         if (e.detail) parts.push(`Detail: ${e.detail}`);
         if (e.hint) parts.push(`Hint: ${e.hint}`);

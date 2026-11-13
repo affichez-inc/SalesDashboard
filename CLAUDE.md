@@ -64,6 +64,8 @@ table**: each table in `public` carries a RESTRICTIVE policy `listed_users_only`
 > A table created after that migration needs the same policy, and a read policy
 > naming the sections that may read it (rule 2 below). Nothing adds either
 > automatically, and without them the new table is readable by any session.
+> Write both `TO authenticated, mcp_scoped`: a policy for `authenticated` alone
+> shows the Claude connector's limited users nothing (see **The Claude connector**).
 
 Identity is the email in the session token, so two more things hold it up:
 
@@ -78,7 +80,8 @@ Identity is the email in the session token, so two more things hold it up:
   an anonymous or unlisted one, the three Publicité RPCs anyone without the
   section (`app_require_section('publicite')`, first statement of the body, which
   raises 42501 and reaches the browser as a 403). Write a new one the same way,
-  or make it SECURITY INVOKER.
+  or make it SECURITY INVOKER. One revoked from PUBLIC also needs
+  `GRANT EXECUTE ... TO mcp_scoped` before Claude's limited users can call it.
 - **An edge function is reachable with the anon key**, which ships in the
   frontend bundle. One that returns data checks its caller: `get-zoho-users`
   (the Zoho user directory behind the "add user" picker) asks `app_is_admin()`
@@ -925,10 +928,32 @@ full price.
 - **Who.** Only a user whose `allowed_users.can_use_claude` is true, off for everyone by default and
   ticked in Paramètres → Utilisateurs (admins too: it is not a section, and an admin does not get
   it by role), **and whose `auth.users` row has no password** (`encrypted_password` empty). The
-  function asks `mcp_claude_access(sub)` on every request; the consent page refuses the flagless
+  function asks `mcp_claude_grant(sub)` on every request; the consent page refuses the flagless
   before a token exists. The password rule exists because the consent endpoint accepts any session
   and the token's `amr` is always `oauth_provider/authorization_code`: without it, a password
   session could be turned into a connector token.
+- **What: all data, or chosen sections** (`20261113150000_claude_connector_modules.sql`).
+  `allowed_users.claude_sections` NULL is all data, through `mcp_reader`. A list (ticked under
+  "Seulement ces modules") is read through `mcp_scoped`, which has no BYPASSRLS: the app's own
+  policies and `app_require_section()` decide, as that user, with the same own-row rules (Mon
+  Portail; own pay only with Mon Portail through Claude). Claude never gets a section the person
+  cannot open in the app: `claude_open_sections()` keeps the ticks the app also opens, an admin
+  opening all five, and on `mcp_scoped` `app_is_admin()` is always false. A list whose sections are
+  all closed in the app gets a 403. The five users enabled before that day kept all data.
+- **How `mcp_scoped` knows who it reads for.** The policies read the address in
+  `request.jwt.claims`, which Claude's SELECT could rewrite with `set_config()`. So the helpers
+  (`app_is_listed`, `app_is_admin`, `app_can_access`, `app_can_access_any`, `app_portal_rep`,
+  `app_rep_name`, `app_require_section`) branch on `session_user = 'mcp_scoped'`, which a query
+  cannot change, and read the caller from `mcp_scoped_caller`, keyed by transaction id. The function
+  opens each transaction read-write, calls `mcp_scoped_bind(user)`, makes it read-only, runs the
+  query and **rolls back**: the row never outlives the request. Every app session takes the other
+  branch, unchanged. `allowed_users` and `get_my_permissions()` read the claims directly and are
+  closed to `mcp_scoped`. **A policy written for `authenticated` alone shows `mcp_scoped` nothing**
+  (the migration added it to every existing read policy), and a function revoked from PUBLIC needs
+  its own grant: new ones fail closed for limited users, never open. `describe_database` lists only
+  the relations that return a row to a limited user, under a note saying what they cover. The old
+  `mcp_claude_access()` answers `not_enabled` for a limited user, so a function build older than the
+  migration refuses them rather than reading everything.
 - **The tick clears the password.** `generateLink` gives every new account a random password
   (`adminGenerateLink` in Supabase Auth), which is why they all have one. `sync_allowed_users_to_auth`
   clears it on every write to a row with the flag on (`20261102140000_claude_access_from_admin_panel.sql`).
@@ -953,8 +978,12 @@ full price.
   has BYPASSRLS, SELECT on every relation of `public` except `zoho_oauth_token`, EXECUTE on the
   functions `authenticated` may run, and default privileges for new tables and functions. **A new
   table that holds a credential needs `REVOKE ALL ... FROM mcp_reader`.** Its password exists only in
-  the `MCP_DB_URL` secret (Supavisor, transaction mode, user `mcp_reader.<ref>`).
-- **Read-only four times over**: no write privilege; `BEGIN READ ONLY`; `{ simple: false }` on
+  the `MCP_DB_URL` secret (Supavisor, transaction mode, user `mcp_reader.<ref>`). `mcp_scoped` is a
+  member of nothing too, with SELECT on `public` except `zoho_oauth_token`, `allowed_users` and
+  `mcp_scoped_caller`; its password is in `MCP_SCOPED_DB_URL`. Without that secret, all-data users
+  are served and limited users get a 503.
+- **Read-only four times over**: no write privilege (`mcp_scoped`'s binding is its only write, before
+  the transaction turns read-only); `BEGIN READ ONLY`; `{ simple: false }` on
   `unsafe()` so the extended protocol takes one statement (postgres.js uses the simple protocol, which
   runs several, for a query without parameters); and the text sits inside
   `SELECT * FROM (...) LIMIT n`, so SET, COMMIT, DO or a writing CTE are syntax errors. Remove none

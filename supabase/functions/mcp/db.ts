@@ -1,30 +1,86 @@
-// The database side of the connector: one login, mcp_reader, which can read
-// `public` and write nothing (migration 20261030120000_claude_connector.sql).
+// The database side of the connector. Two logins, neither of which can write
+// anything:
+//   mcp_reader  reads all of `public` (BYPASSRLS), for a user whose
+//               allowed_users.claude_sections is NULL
+//               (20261030120000_claude_connector.sql);
+//   mcp_scoped  is subject to RLS, for a user limited to some sections: the
+//               app's own policies decide what it reads, as that user
+//               (20261113150000_claude_connector_modules.sql).
 //
-// MCP_DB_URL is that login through the shared pooler in transaction mode:
+// MCP_DB_URL and MCP_SCOPED_DB_URL are those logins through the shared pooler
+// in transaction mode:
 //   postgresql://mcp_reader.<project-ref>:<password>@aws-1-us-east-1.pooler.supabase.com:6543/postgres
 // Transaction mode has no prepared statements, hence `prepare: false`.
 
 import postgres from 'npm:postgres@3.4.9';
 
-const sql = postgres(Deno.env.get('MCP_DB_URL')!, {
-  prepare: false,
-  max: 3,
-  idle_timeout: 20,
-  connect_timeout: 10,
-});
+const OPTIONS = { prepare: false, max: 3, idle_timeout: 20, connect_timeout: 10 };
 
-export type Access = 'ok' | 'not_enabled' | 'has_password' | 'unknown';
+const sql = postgres(Deno.env.get('MCP_DB_URL')!, OPTIONS);
+
+const SCOPED_URL = Deno.env.get('MCP_SCOPED_DB_URL');
+const scopedSql = SCOPED_URL ? postgres(SCOPED_URL, OPTIONS) : null;
+
+/** Whether the mcp_scoped login is configured; without it only all-data users are served. */
+export const scopedAvailable = scopedSql !== null;
+
+export type Verdict = 'ok' | 'not_enabled' | 'has_password' | 'unknown';
+
+export interface Grant {
+  verdict: Verdict;
+  /** null: all data. Otherwise the sections open to this user's Claude, possibly none. */
+  sections: string[] | null;
+}
 
 /**
- * Whether the token's user may use the connector: listed with the flag on, and
- * an account without a password (mcp_claude_access, migration
- * 20261030140000_claude_connector_token_lock.sql).
+ * Whether the token's user may use the connector (listed with the flag on, and
+ * an account without a password), and what it reads (mcp_claude_grant).
  */
-export async function claudeAccess(userId: string): Promise<Access> {
-  const [row] = await sql<{ verdict: Access }[]>`
-    SELECT public.mcp_claude_access(${userId}::uuid) AS verdict`;
-  return row.verdict;
+export async function claudeGrant(userId: string): Promise<Grant> {
+  const [row] = await sql<Grant[]>`
+    SELECT verdict, sections FROM public.mcp_claude_grant(${userId}::uuid)`;
+  return row;
+}
+
+/** Who a request reads as. */
+export type Caller =
+  | { email: string; scope: 'all' }
+  | { email: string; scope: 'sections'; userId: string; sections: string[] };
+
+/** The caller as the database sees them, once bound (mcp_scoped_bind). */
+export interface Bound {
+  email: string;
+  rep_name: string | null;
+  sections: string[];
+}
+
+/** Carries a result out of a transaction that must roll back. */
+class Rollback<T> {
+  constructor(readonly value: T) {}
+}
+
+/**
+ * Runs `fn` on mcp_scoped in a transaction bound to the caller, then rolls it
+ * back. The binding row is the first write and the last: the transaction is
+ * read-only from the next statement on, and nothing of it is kept.
+ */
+async function asCaller<T>(userId: string, fn: (tx: postgres.TransactionSql, who: Bound) => Promise<T>): Promise<T> {
+  if (!scopedSql) throw new Error('MCP_SCOPED_DB_URL is not set');
+  try {
+    await scopedSql.begin('read write', async (tx) => {
+      const [who] = await tx<Bound[]>`
+        SELECT email, rep_name, sections FROM public.mcp_scoped_bind(${userId}::uuid)`;
+      if (!who || who.sections.length === 0) {
+        throw new Error('This user has no section open to Claude any more.');
+      }
+      await tx`SET TRANSACTION READ ONLY`;
+      throw new Rollback(await fn(tx, who));
+    });
+  } catch (err) {
+    if (err instanceof Rollback) return err.value as T;
+    throw err;
+  }
+  throw new Error('The transaction ended without a result.');
 }
 
 export interface QueryResult {
@@ -45,7 +101,9 @@ const ONE_STATEMENT = { simple: false } as postgres.UnsafeQueryOptions;
  * `maxRows` rows.
  *
  * Four things keep it read-only, and each would hold without the others:
- *   - mcp_reader has no write privilege on anything;
+ *   - neither login has a write privilege on anything (mcp_scoped's one write
+ *     is its own binding, through mcp_scoped_bind, before the transaction
+ *     turns read-only);
  *   - the transaction is READ ONLY, and its first statement takes the snapshot
  *     after which Postgres refuses to switch it back to read-write;
  *   - `simple: false` sends the text through the extended protocol, which
@@ -63,31 +121,39 @@ const ONE_STATEMENT = { simple: false } as postgres.UnsafeQueryOptions;
  * connection it would outlive the request: account_ai_summary_claim() takes an
  * advisory lock and would wait on it. So the query runs in a savepoint and the
  * locks are released on the same connection afterwards, failed query or not.
+ *
+ * A caller limited to sections runs on mcp_scoped, in a transaction bound to
+ * them (asCaller): the same four locks, with RLS deciding which rows exist.
  */
-export async function runQuery(text: string, maxRows: number): Promise<QueryResult> {
+export async function runQuery(caller: Caller, text: string, maxRows: number): Promise<QueryResult> {
+  if (caller.scope === 'sections') {
+    return await asCaller(caller.userId, (tx) => queryIn(tx, text, maxRows));
+  }
+  return await sql.begin('read only', (tx) => queryIn(tx, text, maxRows));
+}
+
+async function queryIn(tx: postgres.TransactionSql, text: string, maxRows: number): Promise<QueryResult> {
   const wrapped = `SELECT * FROM (\n${withoutTrailingSemicolons(text)}\n) AS q LIMIT ${maxRows + 1}`;
 
-  return await sql.begin('read only', async (tx) => {
-    await tx`
-      SELECT set_config('statement_timeout', '20s', true),
-             set_config('TimeZone', 'America/Toronto', true),
-             set_config('search_path', 'public', true)`;
-    try {
-      const result = await tx.savepoint((sp) => sp.unsafe(wrapped, [], ONE_STATEMENT).raw());
-      const rows = (result as unknown as (Uint8Array | null)[][]).map(
-        (row) => row.map((v) => (v === null ? null : decoder.decode(v))),
-      );
-      return {
-        columns: result.columns.map((c) => c.name),
-        rows: rows.slice(0, maxRows),
-        truncated: rows.length > maxRows,
-      };
-    } finally {
-      // Never masks the query's own error: a connection that cannot run this
-      // is gone, and its locks with it.
-      await tx`SELECT pg_advisory_unlock_all()`.catch(() => {});
-    }
-  });
+  await tx`
+    SELECT set_config('statement_timeout', '20s', true),
+           set_config('TimeZone', 'America/Toronto', true),
+           set_config('search_path', 'public', true)`;
+  try {
+    const result = await tx.savepoint((sp) => sp.unsafe(wrapped, [], ONE_STATEMENT).raw());
+    const rows = (result as unknown as (Uint8Array | null)[][]).map(
+      (row) => row.map((v) => (v === null ? null : decoder.decode(v))),
+    );
+    return {
+      columns: result.columns.map((c) => c.name),
+      rows: rows.slice(0, maxRows),
+      truncated: rows.length > maxRows,
+    };
+  } finally {
+    // Never masks the query's own error: a connection that cannot run this
+    // is gone, and its locks with it.
+    await tx`SELECT pg_advisory_unlock_all()`.catch(() => {});
+  }
 }
 
 /**
@@ -141,11 +207,46 @@ function withoutTrailingSemicolons(text: string): string {
 }
 
 /**
- * The live schema: every table, view and function mcp_reader can use, so the
+ * The live schema: every table, view and function the caller can use, so the
  * list never drifts from the database. Comments are included where they exist.
+ *
+ * For a caller limited to sections, a relation is listed only if it returns at
+ * least one row to them, since a table outside their sections answers with no
+ * rows rather than an error. Row estimates count the whole table and are left
+ * out for them. `who` is how the database sees that caller.
  */
-export async function describeSchema(): Promise<string> {
-  const relations = await sql<{ name: string; kind: string; est_rows: string | null; comment: string | null; columns: string }[]>`
+export async function describeSchema(caller: Caller): Promise<{ who: Bound | null; schema: string }> {
+  if (caller.scope === 'sections') {
+    return await asCaller(caller.userId, async (tx, who) => {
+      const schema = await readSchema(tx);
+      const visible = await visibleRelations(tx, schema.relations.map((r) => r.name));
+      schema.relations = schema.relations
+        .filter((r) => visible.has(r.name))
+        .map((r) => ({ ...r, est_rows: null }));
+      return { who, schema: formatSchema(schema) };
+    });
+  }
+  return { who: null, schema: formatSchema(await sql.begin('read only', (tx) => readSchema(tx))) };
+}
+
+/** The relations among `names` that return a row to the session's user, in one statement. */
+async function visibleRelations(tx: postgres.TransactionSql, names: string[]): Promise<Set<string>> {
+  if (names.length === 0) return new Set();
+  const probe = names
+    .map((n) => `SELECT '${n.replaceAll("'", "''")}' AS name WHERE EXISTS (SELECT 1 FROM public."${n.replaceAll('"', '""')}")`)
+    .join('\nUNION ALL\n');
+  const rows = await tx.unsafe<{ name: string }[]>(probe);
+  return new Set(rows.map((r) => r.name));
+}
+
+interface Schema {
+  relations: { name: string; kind: string; est_rows: string | null; comment: string | null; columns: string }[];
+  enums: { name: string; labels: string }[];
+  functions: { name: string; args: string; result: string; comment: string | null }[];
+}
+
+async function readSchema(sql: postgres.TransactionSql): Promise<Schema> {
+  const relations = await sql<Schema['relations']>`
     SELECT c.relname AS name,
            CASE c.relkind WHEN 'v' THEN 'view' WHEN 'm' THEN 'materialized view' ELSE 'table' END AS kind,
            CASE WHEN c.relkind IN ('r', 'p', 'm') AND c.reltuples >= 0 THEN c.reltuples::bigint::text END AS est_rows,
@@ -159,14 +260,14 @@ export async function describeSchema(): Promise<string> {
      GROUP BY c.oid
      ORDER BY c.relname`;
 
-  const enums = await sql<{ name: string; labels: string }[]>`
+  const enums = await sql<Schema['enums']>`
     SELECT t.typname AS name, string_agg(quote_literal(e.enumlabel), ', ' ORDER BY e.enumsortorder) AS labels
       FROM pg_type t JOIN pg_enum e ON e.enumtypid = t.oid
      WHERE t.typnamespace = 'public'::regnamespace
      GROUP BY t.typname
      ORDER BY t.typname`;
 
-  const functions = await sql<{ name: string; args: string; result: string; comment: string | null }[]>`
+  const functions = await sql<Schema['functions']>`
     SELECT p.proname AS name,
            pg_get_function_arguments(p.oid) AS args,
            pg_get_function_result(p.oid) AS result,
@@ -179,6 +280,10 @@ export async function describeSchema(): Promise<string> {
        AND has_function_privilege(p.oid, 'EXECUTE')
      ORDER BY p.proname`;
 
+  return { relations, enums, functions };
+}
+
+function formatSchema({ relations, enums, functions }: Schema): string {
   const lines: string[] = ['## Tables and views (schema public)'];
   for (const r of relations) {
     const size = r.est_rows === null ? '' : `, about ${r.est_rows} rows`;

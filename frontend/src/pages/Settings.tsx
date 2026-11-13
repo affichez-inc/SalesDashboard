@@ -16,7 +16,7 @@ import { DEPARTMENTS, MONTHS } from '../lib/constants';
 import { Select } from '../components/Select';
 import { useAuth } from '../contexts/AuthContext';
 import { SECTIONS, DEFAULT_FLAGS } from '../lib/sections';
-import type { SectionFlags } from '../lib/sections';
+import type { SectionFlags, SectionKey } from '../lib/sections';
 import { useNow } from '../hooks/useNow';
 
 type Tab = 'objectives' | 'quarters' | 'sync' | 'logs' | 'users' | 'excluded';
@@ -24,9 +24,14 @@ type Tab = 'objectives' | 'quarters' | 'sync' | 'logs' | 'users' | 'excluded';
 interface Objective { id: string; year: number; month: number; department: string; target_amount: number; }
 interface Quarter { id: string; year: number; quarter: number; start_date: string; end_date: string; num_weeks: number; }
 interface WebhookLog { id: string; received_at: string; action: string; status_code: number; zoho_id: string | null; error_message: string | null; }
-interface AllowedUser extends SectionFlags { email: string; name: string | null; role: string; rep_name: string | null; can_use_claude: boolean; }
+interface AllowedUser extends SectionFlags {
+    email: string; name: string | null; role: string; rep_name: string | null;
+    can_use_claude: boolean;
+    /** What the Claude connector reads: null for all data, else these sections only. */
+    claude_sections: SectionKey[] | null;
+}
 
-const EMPTY_USER: AllowedUser = { email: '', name: '', role: 'member', rep_name: '', can_use_claude: false, ...DEFAULT_FLAGS };
+const EMPTY_USER: AllowedUser = { email: '', name: '', role: 'member', rep_name: '', can_use_claude: false, claude_sections: null, ...DEFAULT_FLAGS };
 
 /** The section flags of a row, with the column default wherever one is missing. */
 function flagsOf(row: Partial<SectionFlags>): SectionFlags {
@@ -36,6 +41,24 @@ function flagsOf(row: Partial<SectionFlags>): SectionFlags {
         if (typeof value === 'boolean') flags[s.column] = value;
     }
     return flags;
+}
+
+/** The sections the person opens in the app: an admin all of them, a member the ticked ones. */
+function appSections(user: AllowedUser): SectionKey[] {
+    const flags = flagsOf(user);
+    return SECTIONS.filter(s => user.role === 'admin' || flags[s.column]).map(s => s.key);
+}
+
+/**
+ * What the person's Claude reads: null for all data, else the sections ticked
+ * for Claude that the person also opens in the app, in nav order. The database
+ * applies the same rule (claude_open_sections), so a section closed in the app
+ * is closed to Claude even if its tick is still stored.
+ */
+function claudeOpenSections(user: AllowedUser): SectionKey[] | null {
+    if (user.claude_sections == null) return null;
+    const open = appSections(user);
+    return SECTIONS.map(s => s.key).filter(k => user.claude_sections!.includes(k) && open.includes(k));
 }
 
 export default function Settings() {
@@ -614,6 +637,9 @@ function UsersManager({ setMessage }: { setMessage: (m: { type: 'success' | 'err
     const [loading, setLoading] = useState(true);
     const [showForm, setShowForm] = useState(false);
     const [form, setForm] = useState<AllowedUser>(EMPTY_USER);
+    // The edited row was saved with Claude on all data. Re-ticking Claude in the
+    // form gives that back; anyone else starts on their app sections.
+    const [savedClaudeAll, setSavedClaudeAll] = useState(false);
     // Somebody who is not a user of the Zoho organisation - an outside ad manager,
     // for instance - is not in the picker and is added by address.
     const [manualEmail, setManualEmail] = useState(false);
@@ -657,6 +683,11 @@ function UsersManager({ setMessage }: { setMessage: (m: { type: 'success' | 'err
 
     const handleSave = async () => {
         if (!form.email.trim()) return;
+        const claudeSections = form.can_use_claude ? claudeOpenSections(form) : null;
+        if (claudeSections !== null && claudeSections.length === 0) {
+            setMessage({ type: 'error', text: 'Cochez au moins un module pour Claude, ou choisissez « Toutes les données ».' });
+            return;
+        }
         setSaving(true);
         const payload = {
             email: form.email.trim().toLowerCase(),
@@ -664,6 +695,7 @@ function UsersManager({ setMessage }: { setMessage: (m: { type: 'success' | 'err
             role: form.role,
             ...flagsOf(form),
             can_use_claude: form.can_use_claude === true,
+            claude_sections: claudeSections,
             rep_name: form.rep_name?.trim() || null,
         };
         const { error } = await supabase.from('allowed_users').upsert(payload, { onConflict: 'email' });
@@ -680,7 +712,16 @@ function UsersManager({ setMessage }: { setMessage: (m: { type: 'success' | 'err
     };
 
     const handleEdit = (user: AllowedUser) => {
-        setForm({ ...user, ...flagsOf(user), name: user.name ?? '', rep_name: user.rep_name ?? '' });
+        const claudeSections = user.claude_sections ?? null;
+        setForm({ ...user, ...flagsOf(user), name: user.name ?? '', rep_name: user.rep_name ?? '', claude_sections: claudeSections });
+        setSavedClaudeAll(user.can_use_claude && claudeSections === null);
+        setManualEmail(false);
+        setShowForm(true);
+    };
+
+    const openAdd = () => {
+        setForm(EMPTY_USER);
+        setSavedClaudeAll(false);
         setManualEmail(false);
         setShowForm(true);
     };
@@ -692,7 +733,7 @@ function UsersManager({ setMessage }: { setMessage: (m: { type: 'success' | 'err
                     <h2 className="text-base font-semibold text-ink">Gestion des utilisateurs</h2>
                     <p className="text-xs text-ink-mute mt-0.5">Seules les personnes de cette liste peuvent se connecter. Cochez les sections que chacune peut ouvrir.</p>
                 </div>
-                <button onClick={() => { setForm(EMPTY_USER); setManualEmail(false); setShowForm(true); }}
+                <button onClick={openAdd}
                     className="btn btn-md btn-primary">
                     <Plus className="w-4 h-4" /> Ajouter
                 </button>
@@ -856,23 +897,81 @@ function UsersManager({ setMessage }: { setMessage: (m: { type: 'success' | 'err
                                 : 'Un membre ne voit que les sections cochées. Notre équipe et l’Administration restent réservées aux administrateurs.'}
                         </p>
                     </fieldset>
-                    {/* Not a section: it is off for an admin too until ticked,
-                        and it opens the whole database whatever is ticked above. */}
+                    {/* Not a section: it is off for an admin too until ticked. It reads
+                        either all data or the modules ticked here, never a module the
+                        person cannot open in the app. */}
                     <fieldset>
                         <legend className="block text-xs font-semibold text-ink-mute mb-1.5">Connecteur Claude</legend>
                         <label className="flex items-center gap-2.5 text-sm font-medium text-ink-secondary cursor-pointer">
                             <input type="checkbox"
                                    checked={form.can_use_claude === true}
-                                   onChange={e => setForm(f => ({ ...f, can_use_claude: e.target.checked }))}
+                                   onChange={e => {
+                                       const on = e.target.checked;
+                                       setForm(f => ({
+                                           ...f,
+                                           can_use_claude: on,
+                                           claude_sections: on && f.claude_sections == null && !savedClaudeAll ? appSections(f) : f.claude_sections,
+                                       }));
+                                   }}
                                    className="w-4 h-4 accent-primary rounded-xs" />
                             Peut interroger les données avec Claude
                         </label>
-                        <p className={cn('text-2xs mt-2',
-                                         form.can_use_claude
-                                             ? 'bg-tone-warn-soft border border-tone-warn/40 rounded-md px-3 py-2 text-tone-warn-ink'
-                                             : 'text-ink-mute')}>
-                            En lecture seulement, mais sur toutes les données : les ventes de tous les représentants, les clients, la paie et les commissions, quels que soient le rôle et les sections cochées.
-                        </p>
+                        {form.can_use_claude && (() => {
+                            const all = form.claude_sections == null;
+                            const open = appSections(form);
+                            return (
+                                <div className="mt-3 ml-6.5 space-y-2.5">
+                                    <p className="text-2xs font-semibold text-ink-mute uppercase tracking-eyebrow">Ce que Claude peut lire</p>
+                                    <label className="flex items-center gap-2.5 text-sm font-medium text-ink-secondary cursor-pointer">
+                                        <input type="radio" name="claude-scope"
+                                               checked={all}
+                                               onChange={() => setForm(f => ({ ...f, claude_sections: null }))}
+                                               className="w-4 h-4 accent-primary" />
+                                        Toutes les données
+                                    </label>
+                                    <label className="flex items-center gap-2.5 text-sm font-medium text-ink-secondary cursor-pointer">
+                                        <input type="radio" name="claude-scope"
+                                               checked={!all}
+                                               onChange={() => setForm(f => ({ ...f, claude_sections: f.claude_sections ?? appSections(f) }))}
+                                               className="w-4 h-4 accent-primary" />
+                                        Seulement ces modules
+                                    </label>
+                                    {!all && (
+                                        <div className="ml-6.5 grid grid-cols-2 sm:grid-cols-3 gap-x-4 gap-y-2">
+                                            {SECTIONS.map(s => {
+                                                const inApp = open.includes(s.key);
+                                                return (
+                                                    <label key={s.key}
+                                                           className={cn('flex items-start gap-2.5 text-sm font-medium',
+                                                                         inApp ? 'text-ink-secondary cursor-pointer' : 'text-ink-faint')}>
+                                                        <input type="checkbox"
+                                                               checked={inApp && form.claude_sections!.includes(s.key)}
+                                                               disabled={!inApp}
+                                                               onChange={e => setForm(f => {
+                                                                   const rest = (f.claude_sections ?? []).filter(k => k !== s.key);
+                                                                   return { ...f, claude_sections: e.target.checked ? [...rest, s.key] : rest };
+                                                               })}
+                                                               className="w-4 h-4 mt-0.5 shrink-0 accent-primary rounded-xs" />
+                                                        <span>
+                                                            {s.label}
+                                                            {!inApp && <span className="block text-2xs font-normal">pas ouvert dans l’app</span>}
+                                                        </span>
+                                                    </label>
+                                                );
+                                            })}
+                                        </div>
+                                    )}
+                                    <p className={cn('text-2xs',
+                                                     all
+                                                         ? 'bg-tone-warn-soft border border-tone-warn/40 rounded-md px-3 py-2 text-tone-warn-ink'
+                                                         : 'text-ink-mute')}>
+                                        {all
+                                            ? 'En lecture seulement, mais sur toutes les données : les ventes de tous les représentants, les clients, la paie et les commissions, quels que soient le rôle et les sections cochées.'
+                                            : 'En lecture seulement, avec les mêmes règles que dans l’app : Mon Portail ne montre que les chiffres de la personne (ses devis, ses factures, ses objectifs, sa paie). La paie des autres, les tâches CRM et l’administration restent fermées.'}
+                                    </p>
+                                </div>
+                            );
+                        })()}
                     </fieldset>
                     <div className="flex items-center gap-3">
                         <button onClick={handleSave} disabled={saving || !form.email.trim()}
@@ -951,12 +1050,14 @@ function UsersManager({ setMessage }: { setMessage: (m: { type: 'success' | 'err
 
 /**
  * The sections a user can open, as chips. An admin has them all by role. Black
- * for Claude: it opens more than any section, and has to be seen at a glance.
+ * for Claude on all data: it opens more than any section, and has to be seen at
+ * a glance. Outlined for Claude limited to modules, with their names.
  */
 function SectionChips({ user }: { user: AllowedUser }) {
     const chip = 'px-2 py-0.5 rounded-full text-2xs font-semibold whitespace-nowrap';
     const flags = flagsOf(user);
     const open = SECTIONS.filter(s => flags[s.column]);
+    const claude = user.can_use_claude ? claudeOpenSections(user) : undefined;
     return (
         <div className="flex flex-wrap gap-1">
             {user.role === 'admin'
@@ -964,7 +1065,12 @@ function SectionChips({ user }: { user: AllowedUser }) {
                 : open.length === 0
                     ? <span className={cn(chip, 'bg-tone-warn-soft text-tone-warn-ink')}>Aucune</span>
                     : open.map(s => <span key={s.key} className={cn(chip, 'bg-stone text-ink-secondary')}>{s.label}</span>)}
-            {user.can_use_claude && <span className={cn(chip, 'bg-ink text-white')}>Claude</span>}
+            {claude === null && <span className={cn(chip, 'bg-ink text-white')}>Claude · tout</span>}
+            {claude && (claude.length === 0
+                ? <span className={cn(chip, 'bg-tone-warn-soft text-tone-warn-ink')}>Claude · aucun module</span>
+                : <span className={cn(chip, 'bg-white text-ink ring-1 ring-inset ring-ink')}>
+                      Claude · {claude.map(k => SECTIONS.find(s => s.key === k)!.label).join(', ')}
+                  </span>)}
         </div>
     );
 }

@@ -8,6 +8,48 @@
 /** Sent once, at connection. Points at the full guide. */
 export const INSTRUCTIONS = `Read-only access to the Affichez sales database (Zoho Books quotes and invoices, Zoho CRM accounts, leads and tasks, Google and Meta ad spend). Call describe_database before the first query of a conversation: it explains what each table really contains, and several tables do not hold what their name suggests. To reproduce a figure shown on the dashboard, call the dashboard's own function (SELECT * FROM get_dashboard_kpis(p_year => 2026)) rather than re-deriving it.`;
 
+const SECTION_LABELS: Record<string, string> = {
+  devis: 'Devis',
+  factures: 'Factures',
+  comptes: 'Comptes',
+  publicite: 'Publicité',
+  portail: 'Mon Portail',
+};
+
+function sectionNames(sections: string[]): string {
+  return sections.map((s) => SECTION_LABELS[s] ?? s).join(', ');
+}
+
+/** The instructions for a caller limited to sections: the same, plus what they cover. */
+export function instructionsFor(email: string, sections: string[] | null): string {
+  if (sections === null) return INSTRUCTIONS;
+  return `${INSTRUCTIONS} This connection reads as ${email} and sees only these sections of the app: ${sectionNames(sections)}. describe_database says what that leaves visible.`;
+}
+
+/**
+ * Put above the guide for a caller limited to sections. A hidden table answers
+ * with no rows, not an error, so Claude has to be told a zero may only mean
+ * "not visible".
+ */
+export function accessNote(who: { email: string; rep_name: string | null; sections: string[] }): string {
+  const lines = [
+    '# Your access',
+    `This connection reads the database as ${who.email}, limited to these sections of the app: ${sectionNames(who.sections)}. ` +
+      'Everything else is invisible to it: the other sections, and what only administrators see (the pay and commissions of others, CRM tasks, settings, AI summaries).',
+  ];
+  if (who.sections.includes('portail')) {
+    lines.push(who.rep_name
+      ? `- Mon Portail adds the own figures of ${who.rep_name}: their quotes, their invoices and those of the accounts they hold a lead or a contact on, their objectives and their pay, plus the CRM leads and contacts.`
+      : '- Mon Portail: no rep is associated with this account, so it adds no quotes, invoices or pay of its own.');
+  }
+  lines.push(
+    '- A table you cannot see returns no rows, and a function built on one returns zeros, empty lists or a permission error. That means "not visible to you", never "there are none": say so instead of reporting a zero.',
+    '- Only the tables and views listed at the end return rows to you.',
+    '',
+  );
+  return lines.join('\n');
+}
+
 /** Returned by describe_database, above the live list of tables and functions. */
 export const GUIDE = `# Affichez sales database: read before querying
 
